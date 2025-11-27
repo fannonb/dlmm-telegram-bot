@@ -21,13 +21,11 @@ export interface NetworkHealthCheck {
 
 // Get primary RPC from environment (Helius, QuickNode, etc.)
 const PRIMARY_RPC = process.env.RPC_ENDPOINT || process.env.SOLANA_RPC_URL;
-const FALLBACK_RPC = 'https://api.mainnet-beta.solana.com';
 
 export class NetworkResilienceService {
   private healthChecks = new Map<string, NetworkHealthCheck>();
-  private fallbackEndpoints: string[] = PRIMARY_RPC 
-    ? [PRIMARY_RPC, FALLBACK_RPC]  // Use env RPC first
-    : [FALLBACK_RPC];
+  // Only use the configured RPC - no public Solana fallback (it's too rate-limited)
+  private fallbackEndpoints: string[] = PRIMARY_RPC ? [PRIMARY_RPC] : [];
   private userEndpoints: string[] = [];
   private isInitialized = false;
   private initPromise: Promise<void> | null = null;
@@ -37,7 +35,7 @@ export class NetworkResilienceService {
     if (PRIMARY_RPC) {
       console.log(`[NetworkResilience] Using primary RPC from env: ${PRIMARY_RPC.substring(0, 50)}...`);
     } else {
-      console.log(`[NetworkResilience] No RPC_ENDPOINT set, using public Solana RPC (rate-limited)`);
+      console.error(`[NetworkResilience] ⚠️ No RPC_ENDPOINT set! Please configure RPC_ENDPOINT environment variable.`);
     }
     // Non-blocking initialization - don't await
     this.initPromise = this.initializeHealthChecks();
@@ -194,9 +192,13 @@ export class NetworkResilienceService {
       return selected;
     }
     
-    // All failed, return primary from env or default
-    console.warn('[NetworkResilience] All health checks failed, using default');
-    return PRIMARY_RPC || FALLBACK_RPC;
+    // All failed, return primary from env
+    if (PRIMARY_RPC) {
+      console.warn('[NetworkResilience] All health checks failed, using primary RPC');
+      return PRIMARY_RPC;
+    }
+    
+    throw new Error('No RPC endpoint configured. Please set RPC_ENDPOINT environment variable.');
   }
 
   private async refreshHealthChecks(): Promise<void> {
@@ -210,8 +212,11 @@ export class NetworkResilienceService {
     const endpoint = await this.getHealthyEndpoint();
     
     if (!endpoint) {
+      if (!PRIMARY_RPC) {
+        throw new Error('No RPC endpoint configured. Please set RPC_ENDPOINT environment variable.');
+      }
       console.warn('[NetworkResilience] No healthy endpoints available, using primary from env');
-      return new Connection(PRIMARY_RPC || FALLBACK_RPC, 'confirmed');
+      return new Connection(PRIMARY_RPC, 'confirmed');
     }
 
     return new Connection(endpoint, 'confirmed');

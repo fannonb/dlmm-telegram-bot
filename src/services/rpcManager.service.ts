@@ -788,14 +788,10 @@ function loadInitialEndpoints(): RpcEndpointConfig[] {
         });
     }
 
-    // Always include Solana public as last resort
-    if (!endpoints.some(ep => ep.url.includes('mainnet-beta.solana.com'))) {
-        endpoints.push({
-            url: 'https://api.mainnet-beta.solana.com',
-            name: 'Solana Public',
-            weight: 1,
-            rateLimit: 10,
-        });
+    // No longer adding public Solana RPC as fallback - it's too rate-limited for production
+    // Users must configure RPC_ENDPOINT with a proper RPC (Helius, QuickNode, etc.)
+    if (endpoints.length === 0) {
+        console.error('[RPC Manager] ⚠️ No RPC endpoints configured! Please set RPC_ENDPOINT environment variable.');
     }
 
     return endpoints;

@@ -41,10 +41,10 @@ export function mainMenuKeyboard(hasWallet: boolean): InlineKeyboardMarkup {
 export function walletSetupKeyboard(): InlineKeyboardMarkup {
     return {
         inline_keyboard: [
-            [{ text: '📥 Import Existing Wallet', callback_data: 'wallet_import' }],
-            [{ text: '🆕 Create New Wallet', callback_data: 'wallet_create' }],
+            [{ text: '📥 Import from Seed Phrase', callback_data: 'mwallet_import_mnemonic' }],
+            [{ text: '🔐 Import from Private Key', callback_data: 'mwallet_import_key' }],
+            [{ text: '🆕 Create New Wallet', callback_data: 'mwallet_create' }],
             [{ text: '❓ What is a Wallet?', callback_data: 'wallet_info_help' }],
-            [{ text: '⬅️ Back', callback_data: 'menu_main' }],
         ],
     };
 }

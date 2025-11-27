@@ -1,0 +1,11 @@
+{
+  "poolAddress": "9fQYAVUpQ79p98xo1D1cCudik5DrgaU6LmjSexLBWZa1",
+  "tokenAMint": "81aJ783713MRTdEHVPJbSCWbBdbjmy7ZdyaN5zrd75au",
+  "tokenBMint": "7ZfV4DToa3v2CsKiAL6hbVTnQhNZSa8N3xofNMaiNgoM",
+  "tokenASymbol": "TEST-A",
+  "tokenBSymbol": "TEST-B",
+  "tokenADecimals": 9,
+  "tokenBDecimals": 6,
+  "initialLiquidityAdded": true,
+  "createdAt": "2025-11-18T08:15:52.101Z"
+}

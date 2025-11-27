@@ -1,0 +1,42 @@
+[
+  {
+    "timestamp": 1763521172821,
+    "oldPositionAddress": "old_pos_1",
+    "newPositionAddress": "new_pos_1",
+    "poolAddress": "pool_1",
+    "reasonCode": "OUT_OF_RANGE",
+    "reason": "Position out of range",
+    "feesClaimedX": 0.0234,
+    "feesClaimedY": 23.45,
+    "feesClaimedUsd": 46.9,
+    "transactionCostUsd": 0.0003,
+    "oldRange": {
+      "min": -20,
+      "max": 20
+    },
+    "newRange": {
+      "min": -22,
+      "max": 18
+    }
+  },
+  {
+    "timestamp": 1763539744319,
+    "oldPositionAddress": "old_pos_1",
+    "newPositionAddress": "new_pos_1",
+    "poolAddress": "pool_1",
+    "reasonCode": "OUT_OF_RANGE",
+    "reason": "Position out of range",
+    "feesClaimedX": 0.0234,
+    "feesClaimedY": 23.45,
+    "feesClaimedUsd": 46.9,
+    "transactionCostUsd": 0.0003,
+    "oldRange": {
+      "min": -20,
+      "max": 20
+    },
+    "newRange": {
+      "min": -22,
+      "max": 18
+    }
+  }
+]

@@ -1,0 +1,12 @@
+name: "Setup anchor-cli"
+description: "Setup anchor cli"
+runs:
+  using: "composite"
+  steps:
+    - uses: taiki-e/cache-cargo-install-action@v2
+      with:
+        tool: avm
+        tag: v${{ env.ANCHOR_CLI_VERSION }}
+        git: https://github.com/coral-xyz/anchor
+    - run: avm install ${{ env.ANCHOR_CLI_VERSION }}
+      shell: bash

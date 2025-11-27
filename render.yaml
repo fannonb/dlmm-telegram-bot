@@ -1,0 +1,22 @@
+# Render Blueprint for DLMM Telegram Bot
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: dlmm-telegram-bot
+    runtime: node
+    region: oregon  # or singapore, frankfurt, ohio
+    plan: starter   # $7/month - doesn't spin down. Use 'free' for testing only
+    buildCommand: npm install && npm run build
+    startCommand: node dist/telegram/bot.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20.10.0
+      # Add your secrets in Render Dashboard, not here!
+      # - key: TELEGRAM_BOT_TOKEN
+      #   sync: false  # Means you'll set this manually in dashboard
+      # - key: HELIUS_API_KEY
+      #   sync: false

@@ -1,0 +1,78 @@
+[
+  {
+    "id": "notif_1763521172825_f8lw1hbhf",
+    "timestamp": 1763521172825,
+    "type": "INFO",
+    "title": "Test",
+    "message": "Test notification",
+    "severity": "info",
+    "read": false
+  },
+  {
+    "id": "notif_1763521172851_hgxcr0dqe",
+    "timestamp": 1763521172851,
+    "type": "POSITION_OUT_OF_RANGE",
+    "title": "🔴 Position Out of Range",
+    "message": "Your position is no longer earning fees. Active bin 35 is outside your range (-20 to 20). Consider rebalancing.",
+    "severity": "error",
+    "positionAddress": "pos_1",
+    "metadata": {
+      "activeBin": 35,
+      "minBin": -20,
+      "maxBin": 20
+    },
+    "read": false
+  },
+  {
+    "id": "notif_1763521172852_zta0k77vd",
+    "timestamp": 1763521172852,
+    "type": "FEE_THRESHOLD_MET",
+    "title": "💰 Fee Claim Threshold Reached",
+    "message": "Accumulated fees of $125.50 have reached your threshold of $100.00. Ready to claim.",
+    "severity": "success",
+    "positionAddress": "pos_1",
+    "metadata": {
+      "feesUsd": 125.5,
+      "threshold": 100
+    },
+    "read": true
+  },
+  {
+    "id": "notif_1763539744328_rpbiduwxw",
+    "timestamp": 1763539744328,
+    "type": "INFO",
+    "title": "Test",
+    "message": "Test notification",
+    "severity": "info",
+    "read": false
+  },
+  {
+    "id": "notif_1763539744346_d5j1b6ru3",
+    "timestamp": 1763539744346,
+    "type": "POSITION_OUT_OF_RANGE",
+    "title": "🔴 Position Out of Range",
+    "message": "Your position is no longer earning fees. Active bin 35 is outside your range (-20 to 20). Consider rebalancing.",
+    "severity": "error",
+    "positionAddress": "pos_1",
+    "metadata": {
+      "activeBin": 35,
+      "minBin": -20,
+      "maxBin": 20
+    },
+    "read": false
+  },
+  {
+    "id": "notif_1763539744347_fy92zesha",
+    "timestamp": 1763539744347,
+    "type": "FEE_THRESHOLD_MET",
+    "title": "💰 Fee Claim Threshold Reached",
+    "message": "Accumulated fees of $125.50 have reached your threshold of $100.00. Ready to claim.",
+    "severity": "success",
+    "positionAddress": "pos_1",
+    "metadata": {
+      "feesUsd": 125.5,
+      "threshold": 100
+    },
+    "read": true
+  }
+]

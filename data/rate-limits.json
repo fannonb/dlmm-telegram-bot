@@ -1,0 +1,13 @@
+{
+  "entries": {
+    "80594440-default": {
+      "userId": 80594440,
+      "tokens": 9,
+      "lastRefill": 1764209393935,
+      "requestCount": 77,
+      "hourlyCount": 3,
+      "hourlyReset": 1764212910069
+    }
+  },
+  "lastCleanup": 1764242920035
+}

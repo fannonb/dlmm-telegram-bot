@@ -3,11 +3,11 @@
     "80594440-default": {
       "userId": 80594440,
       "tokens": 9,
-      "lastRefill": 1764209393935,
-      "requestCount": 77,
-      "hourlyCount": 3,
-      "hourlyReset": 1764212910069
+      "lastRefill": 1764236339510,
+      "requestCount": 94,
+      "hourlyCount": 1,
+      "hourlyReset": 1764239939510
     }
   },
-  "lastCleanup": 1764242920035
+  "lastCleanup": 1764243519991
 }

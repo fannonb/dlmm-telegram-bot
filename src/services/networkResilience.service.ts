@@ -19,16 +19,26 @@ export interface NetworkHealthCheck {
   error?: string;
 }
 
+// Get primary RPC from environment (Helius, QuickNode, etc.)
+const PRIMARY_RPC = process.env.RPC_ENDPOINT || process.env.SOLANA_RPC_URL;
+const FALLBACK_RPC = 'https://api.mainnet-beta.solana.com';
+
 export class NetworkResilienceService {
   private healthChecks = new Map<string, NetworkHealthCheck>();
-  private fallbackEndpoints: string[] = [
-    'https://api.mainnet-beta.solana.com'
-  ];
+  private fallbackEndpoints: string[] = PRIMARY_RPC 
+    ? [PRIMARY_RPC, FALLBACK_RPC]  // Use env RPC first
+    : [FALLBACK_RPC];
   private userEndpoints: string[] = [];
   private isInitialized = false;
   private initPromise: Promise<void> | null = null;
 
   constructor() {
+    // Log which RPC we're using
+    if (PRIMARY_RPC) {
+      console.log(`[NetworkResilience] Using primary RPC from env: ${PRIMARY_RPC.substring(0, 50)}...`);
+    } else {
+      console.log(`[NetworkResilience] No RPC_ENDPOINT set, using public Solana RPC (rate-limited)`);
+    }
     // Non-blocking initialization - don't await
     this.initPromise = this.initializeHealthChecks();
   }
@@ -180,13 +190,13 @@ export class NetworkResilienceService {
 
     if (healthy.length > 0) {
       const selected = healthy[0].endpoint;
-      console.log(`[NetworkResilience] Found healthy endpoint: ${selected} (${healthy[0].check?.latency}ms)`);
+      console.log(`[NetworkResilience] Found healthy endpoint: ${selected.substring(0, 50)}... (${healthy[0].check?.latency}ms)`);
       return selected;
     }
     
-    // All failed, return default
+    // All failed, return primary from env or default
     console.warn('[NetworkResilience] All health checks failed, using default');
-    return 'https://api.mainnet-beta.solana.com';
+    return PRIMARY_RPC || FALLBACK_RPC;
   }
 
   private async refreshHealthChecks(): Promise<void> {
@@ -200,8 +210,8 @@ export class NetworkResilienceService {
     const endpoint = await this.getHealthyEndpoint();
     
     if (!endpoint) {
-      console.warn('[NetworkResilience] No healthy endpoints available, using default');
-      return new Connection('https://api.mainnet-beta.solana.com', 'confirmed');
+      console.warn('[NetworkResilience] No healthy endpoints available, using primary from env');
+      return new Connection(PRIMARY_RPC || FALLBACK_RPC, 'confirmed');
     }
 
     return new Connection(endpoint, 'confirmed');

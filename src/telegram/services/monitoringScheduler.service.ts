@@ -212,6 +212,13 @@ class MonitoringSchedulerService {
      * Enable monitoring for a user
      */
     enableMonitoring(telegramId: number, intervalMinutes: number = 30): void {
+        // Auto-start the scheduler if it's not running
+        if (!this.isRunning) {
+            console.log('[MonitoringScheduler] Scheduler not running, auto-starting...');
+            this.isRunning = true;
+            this.startDailySummaryScheduler();
+        }
+
         // Save state
         this.saveMonitorState(telegramId, { enabled: true, intervalMinutes });
 
@@ -807,8 +814,18 @@ class MonitoringSchedulerService {
 
     /**
      * Force run a check for a user (manual trigger)
+     * Also re-enables the job if it's not running but user has monitoring enabled
      */
     async forceCheck(telegramId: number): Promise<void> {
+        // If user has monitoring enabled but job isn't running, restart it
+        if (!this.jobs.has(telegramId)) {
+            const state = this.getMonitorState(telegramId);
+            if (state.enabled) {
+                console.log(`[MonitoringScheduler] Restarting monitoring job for user ${telegramId}`);
+                this.enableMonitoring(telegramId, state.intervalMinutes);
+            }
+        }
+        
         await this.runUserCheck(telegramId);
     }
 }

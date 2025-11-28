@@ -38,6 +38,16 @@ export async function handleMonitorSettings(ctx: BotContext): Promise<void> {
         // Get state from scheduler
         const state = monitoringScheduler.getMonitorState(userId);
         
+        // Auto-restart job if monitoring is enabled but job isn't running
+        const schedulerStatus = monitoringScheduler.getStatus();
+        if (state.enabled && !monitoringScheduler.isMonitoringEnabled(userId)) {
+            console.log(`[Monitor] Auto-restarting job for user ${userId}`);
+            monitoringScheduler.enableMonitoring(userId, state.intervalMinutes);
+        }
+        
+        // Re-fetch status after potential restart
+        const updatedSchedulerStatus = monitoringScheduler.getStatus();
+        
         const statusEmoji = state.enabled ? '🟢' : '🔴';
         const statusText = state.enabled ? 'ACTIVE' : 'INACTIVE';
         
@@ -54,9 +64,7 @@ export async function handleMonitorSettings(ctx: BotContext): Promise<void> {
             }
         }
 
-        // Get scheduler stats
-        const schedulerStatus = monitoringScheduler.getStatus();
-        const isSchedulerRunning = schedulerStatus.isRunning ? '🟢 Running' : '🔴 Stopped';
+        const isSchedulerRunning = updatedSchedulerStatus.isRunning ? '🟢 Running' : '🔴 Stopped';
 
         const message = `📡 **Position Monitor**
 
@@ -66,7 +74,7 @@ export async function handleMonitorSettings(ctx: BotContext): Promise<void> {
 ${lastCheckInfo}
 
 **Background Scheduler:** ${isSchedulerRunning}
-**Active Monitors:** ${schedulerStatus.activeMonitors}
+**Active Monitors:** ${updatedSchedulerStatus.activeMonitors}
 
 **How it works:**
 1. Monitor checks your positions at set intervals

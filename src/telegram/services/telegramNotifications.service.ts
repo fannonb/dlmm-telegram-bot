@@ -17,7 +17,7 @@ import { poolService } from '../../services/pool.service';
 import { monitoringService, Alert } from '../../services/monitoring.service';
 
 export interface TelegramAlert {
-    type: 'OUT_OF_RANGE' | 'NEAR_EDGE' | 'FEE_THRESHOLD' | 'PRICE_ALERT' | 'REBALANCE_SUGGESTION' | 'DAILY_SUMMARY' | 'INFO' | 'ERROR';
+    type: 'OUT_OF_RANGE' | 'NEAR_EDGE' | 'FEE_THRESHOLD' | 'PRICE_ALERT' | 'REBALANCE_SUGGESTION' | 'DAILY_SUMMARY' | 'INFO' | 'ERROR' | 'AUTO_REBALANCE_STARTED' | 'AUTO_REBALANCE_SUCCESS' | 'AUTO_REBALANCE_FAILED';
     title: string;
     message: string;
     positionAddress?: string;
@@ -585,9 +585,138 @@ ${reason}`;
             'REBALANCE_SUGGESTION': '💡',
             'DAILY_SUMMARY': '📈',
             'INFO': 'ℹ️',
-            'ERROR': '❌'
+            'ERROR': '❌',
+            'AUTO_REBALANCE_STARTED': '🔄',
+            'AUTO_REBALANCE_SUCCESS': '✅',
+            'AUTO_REBALANCE_FAILED': '❌'
         };
         return icons[type] || '📌';
+    }
+
+    // ==================== AUTO-REBALANCE NOTIFICATIONS ====================
+
+    /**
+     * Send notification when auto-rebalance starts
+     */
+    async sendAutoRebalanceStarted(
+        telegramId: number,
+        positionAddress: string,
+        pair: string,
+        reason: string
+    ): Promise<boolean> {
+        const shortAddr = positionAddress.slice(0, 6) + '...' + positionAddress.slice(-4);
+        
+        const alert: TelegramAlert = {
+            type: 'AUTO_REBALANCE_STARTED',
+            title: '🔄 Auto-Rebalance Started',
+            message: `**${pair}** | \`${shortAddr}\`
+
+⚡ Auto-rebalance initiated
+📋 Reason: ${reason}
+
+_Processing... You'll be notified when complete._`,
+            positionAddress,
+            timestamp: Date.now()
+        };
+
+        return this.sendAlert(telegramId, alert);
+    }
+
+    /**
+     * Send notification when auto-rebalance succeeds
+     */
+    async sendAutoRebalanceSuccess(
+        telegramId: number,
+        positionAddress: string,
+        newPositionAddress: string,
+        pair: string,
+        details: {
+            oldRange: { min: number; max: number };
+            newRange: { min: number; max: number };
+            withdrawnUsd: number;
+            txSignatures: string[];
+        }
+    ): Promise<boolean> {
+        const shortOldAddr = positionAddress.slice(0, 6) + '...' + positionAddress.slice(-4);
+        const shortNewAddr = newPositionAddress.slice(0, 6) + '...' + newPositionAddress.slice(-4);
+        
+        // Format price helper
+        const formatPrice = (price: number): string => {
+            if (price >= 1000) return `$${price.toFixed(2)}`;
+            if (price >= 1) return `$${price.toFixed(4)}`;
+            return `$${price.toFixed(6)}`;
+        };
+        
+        const alert: TelegramAlert = {
+            type: 'AUTO_REBALANCE_SUCCESS',
+            title: '✅ Auto-Rebalance Complete!',
+            message: `**${pair}** rebalanced successfully!
+
+📤 Old: \`${shortOldAddr}\`
+📥 New: \`${shortNewAddr}\`
+
+📏 **New Range:**
+${formatPrice(details.newRange.min)} → ${formatPrice(details.newRange.max)}
+
+💰 Value: ${formatPrice(details.withdrawnUsd)}
+📝 Transactions: ${details.txSignatures.length}`,
+            positionAddress: newPositionAddress,
+            timestamp: Date.now(),
+            keyboard: {
+                inline_keyboard: [
+                    [
+                        { text: '📊 View Position', callback_data: `pos_detail_${newPositionAddress.slice(0, 8)}` },
+                        { text: '🔍 View on Solscan', url: `https://solscan.io/tx/${details.txSignatures[0]}` }
+                    ],
+                    [{ text: '✓ Dismiss', callback_data: 'alert_dismiss' }]
+                ]
+            }
+        };
+
+        return this.sendAlert(telegramId, alert);
+    }
+
+    /**
+     * Send notification when auto-rebalance fails
+     */
+    async sendAutoRebalanceFailed(
+        telegramId: number,
+        positionAddress: string,
+        pair: string,
+        error: string,
+        suggestion?: string
+    ): Promise<boolean> {
+        const shortAddr = positionAddress.slice(0, 6) + '...' + positionAddress.slice(-4);
+        
+        let message = `**${pair}** | \`${shortAddr}\`
+
+❌ Auto-rebalance failed
+📋 Error: ${error}`;
+
+        if (suggestion) {
+            message += `\n\n💡 ${suggestion}`;
+        }
+
+        message += `\n\n_You can try manual rebalance or check position details._`;
+        
+        const alert: TelegramAlert = {
+            type: 'AUTO_REBALANCE_FAILED',
+            title: '❌ Auto-Rebalance Failed',
+            message,
+            positionAddress,
+            timestamp: Date.now(),
+            keyboard: {
+                inline_keyboard: [
+                    [
+                        { text: '🔄 Manual Rebalance', callback_data: `pos_rebalance_${positionAddress.slice(0, 8)}` },
+                        { text: '📊 View Details', callback_data: `pos_detail_${positionAddress.slice(0, 8)}` }
+                    ],
+                    [{ text: '✓ Dismiss', callback_data: 'alert_dismiss' }]
+                ]
+            }
+        };
+
+        return this.sendAlert(telegramId, alert);
     }
 }
 

@@ -5,6 +5,115 @@ import { UserPosition } from './position.service';
 import { analyticsDataStore } from './analyticsDataStore.service';
 import { configManager } from '../config/config.manager';
 import chalk from 'chalk';
+import { z } from 'zod';
+
+// ==================== ZOD SCHEMAS FOR VALIDATION ====================
+
+// Schema for LLM Decision output validation
+export const LLMDecisionSchema = z.object({
+    action: z.enum(['rebalance', 'hold', 'compound', 'close', 'widen_range', 'narrow_range']),
+    confidence: z.number().min(0).max(100),
+    urgency: z.enum(['immediate', 'soon', 'low', 'none']),
+    reasoning: z.array(z.string()).min(1).max(10),
+    expectedOutcome: z.object({
+        costUsd: z.number(),
+        expectedFeesNext24h: z.number().optional(),
+        dailyFeesUsd: z.number().optional(),
+        weeklyFeesUsd: z.number().optional(),
+        breakEvenHours: z.number(),
+        roi: z.number(),
+        positionLifespanDays: z.number().optional()
+    }),
+    suggestedRange: z.object({
+        binsPerSide: z.number().min(1).max(34),
+        totalBins: z.number().min(1).max(69),
+        rangeWidthPercent: z.number().optional(),
+        priceMin: z.number().optional(),
+        priceMax: z.number().optional(),
+        rangeJustification: z.string()
+    }).optional(),
+    marketInsight: z.string().optional(),
+    positionHealth: z.enum(['healthy', 'at-risk', 'critical', 'inactive']).optional(),
+    alternativeAction: z.string().optional(),
+    risks: z.array(z.string()),
+    suggestedActions: z.array(z.string()).optional(),
+    learnings: z.string().optional(),
+    // NEW: Enhanced risk assessment with quantified metrics
+    riskAssessment: z.object({
+        impermanentLoss: z.object({
+            ifPriceUp10Percent: z.number(),
+            ifPriceDown10Percent: z.number()
+        }).optional(),
+        supportDistance: z.number().optional(),      // % distance to nearest support
+        resistanceDistance: z.number().optional(),   // % distance to nearest resistance
+        rebalanceProbability7Days: z.number().optional()  // 0-100% chance of needing rebalance
+    }).optional(),
+    // NEW: Strategy evaluation for rebalancing decisions
+    strategyEvaluation: z.object({
+        currentStrategy: z.enum(['Spot', 'Curve', 'BidAsk']),
+        isOptimal: z.boolean(),
+        reason: z.string(),
+        suggestedStrategy: z.enum(['Spot', 'Curve', 'BidAsk']).optional()
+    }).optional()
+});
+
+// Schema for Pool Creation Recommendation validation
+export const PoolCreationRecommendationSchema = z.object({
+    strategy: z.enum(['Spot', 'Curve', 'BidAsk']),
+    confidence: z.number().min(0).max(100),
+    reasoning: z.array(z.string()).min(1).max(10),
+    binConfiguration: z.object({
+        minBinId: z.number(),
+        maxBinId: z.number(),
+        bidBins: z.number().min(1).max(34),
+        askBins: z.number().min(1).max(34),
+        totalBins: z.number().min(1).max(69)
+    }),
+    liquidityDistribution: z.object({
+        tokenXPercentage: z.number().min(0).max(100),
+        tokenYPercentage: z.number().min(0).max(100),
+        isAsymmetric: z.boolean()
+    }),
+    expectedPerformance: z.object({
+        estimatedAPR: z.number(),
+        feeEfficiency: z.number(),
+        rebalanceFrequency: z.enum(['high', 'medium', 'low'])
+    }),
+    risks: z.array(z.string()),
+    marketRegime: z.string(),
+    // Optional enhanced fields for improved AI output
+    riskAssessment: z.object({
+        impermanentLoss: z.object({
+            priceUp10Percent: z.object({ il: z.number(), severity: z.string() }).optional(),
+            priceDown10Percent: z.object({ il: z.number(), severity: z.string() }).optional()
+        }).optional(),
+        rebalancing: z.object({
+            expectedDaysUntilRebalance: z.number(),
+            probabilityWithin7Days: z.number(),
+            costPerRebalance: z.number().optional(),
+            breakEvenHours: z.number().optional()
+        }).optional(),
+        marketStructure: z.object({
+            nearestSupport: z.object({ price: z.number(), distance: z.string(), breakProbability: z.number() }).optional(),
+            nearestResistance: z.object({ price: z.number(), distance: z.string(), breakProbability: z.number() }).optional()
+        }).optional()
+    }).optional(),
+    strategyComparison: z.array(z.object({
+        strategy: z.string(),
+        recommended: z.boolean(),
+        expectedAPR: z.number().optional(),
+        feeEfficiency: z.number().optional(),
+        rebalanceFrequency: z.string().optional(),
+        rebalanceDays: z.number().optional(),
+        riskScore: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional(),
+        confidence: z.number().optional(),
+        issue: z.string().optional(),
+        whyRejected: z.string().optional(),
+        aprDifferencePercent: z.number().optional(),  // e.g., -23 means 23% lower than recommended
+        bestFor: z.string().optional()
+    })).optional(),
+    mitigationStrategies: z.array(z.string()).optional()
+});
 
 // ==================== TYPES ====================
 
@@ -121,6 +230,23 @@ export interface LLMDecision {
     risks: string[];
     suggestedActions?: string[];
     learnings?: string;
+    // NEW: Enhanced risk assessment with quantified metrics
+    riskAssessment?: {
+        impermanentLoss?: {
+            ifPriceUp10Percent: number;
+            ifPriceDown10Percent: number;
+        };
+        supportDistance?: number;      // % distance to nearest support
+        resistanceDistance?: number;   // % distance to nearest resistance
+        rebalanceProbability7Days?: number;  // 0-100% chance of needing rebalance
+    };
+    // NEW: Strategy evaluation for rebalancing decisions
+    strategyEvaluation?: {
+        currentStrategy: 'Spot' | 'Curve' | 'BidAsk';
+        isOptimal: boolean;
+        reason: string;
+        suggestedStrategy?: 'Spot' | 'Curve' | 'BidAsk';
+    };
 }
 
 export interface LLMDecisionLog {
@@ -665,51 +791,73 @@ export class LLMAgentService {
         }
 
         const { provider, model } = this.providerConfig;
-        const startTime = Date.now();
-        console.log(chalk.cyan(`[LLM] Calling ${provider}/${model} for position analysis...`));
 
-        try {
-            let decision: LLMDecision;
+        // Retry configuration (Week 1 Quick Win: Retry logic with backoff)
+        const maxRetries = 3;
+        const baseDelayMs = 1000;
+        let lastError: Error | null = null;
 
-            if (provider === 'anthropic') {
-                const response = await this.client.messages.create({
-                    model,
-                    max_tokens: 2000,
-                    temperature: 0.3,
-                    system: systemPrompt,
-                    messages: [{ role: 'user', content: userMessage }]
-                });
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            const startTime = Date.now();
+            console.log(chalk.cyan(`[LLM] Calling ${provider}/${model} for position analysis... (attempt ${attempt}/${maxRetries})`));
 
-                const content = response.content[0];
-                if (content.type !== 'text') {
-                    throw new Error('Unexpected response type');
+            try {
+                let decision: LLMDecision;
+
+                // Temperature 0.1 for deterministic financial decisions (Week 1 Quick Win)
+                const temperature = 0.1;
+
+                if (provider === 'anthropic') {
+                    const response = await this.client.messages.create({
+                        model,
+                        max_tokens: 2000,
+                        temperature,
+                        system: systemPrompt,
+                        messages: [{ role: 'user', content: userMessage }]
+                    });
+
+                    const content = response.content[0];
+                    if (content.type !== 'text') {
+                        throw new Error('Unexpected response type');
+                    }
+
+                    decision = this.parseDecision(content.text);
+                } else {
+                    const response = await this.client.chat.completions.create({
+                        model,
+                        max_tokens: this.getMaxTokensForModel(model),
+                        temperature,
+                        messages: [
+                            { role: 'system', content: systemPrompt },
+                            { role: 'user', content: userMessage }
+                        ]
+                    });
+
+                    const content = response.choices[0].message.content;
+                    decision = this.parseDecision(content);
                 }
 
-                decision = this.parseDecision(content.text);
-            } else {
-                const response = await this.client.chat.completions.create({
-                    model,
-                    max_tokens: this.getMaxTokensForModel(model),
-                    temperature: 0.3,
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: userMessage }
-                    ]
-                });
+                const elapsed = Date.now() - startTime;
+                const actionEmoji = decision.action === 'hold' ? '✋' : decision.action === 'rebalance' ? '♻️' : decision.action === 'close' ? '❌' : '🔄';
+                console.log(chalk.green(`[LLM] ✓ Response received in ${elapsed}ms: ${actionEmoji} ${decision.action.toUpperCase()} (${decision.confidence}% confidence)`));
 
-                const content = response.choices[0].message.content;
-                decision = this.parseDecision(content);
+                return decision;
+            } catch (error: any) {
+                lastError = error;
+                console.error(chalk.yellow(`[LLM] ⚠️ Attempt ${attempt} failed: ${error.message}`));
+
+                // If not the last attempt, wait with exponential backoff
+                if (attempt < maxRetries) {
+                    const delayMs = baseDelayMs * Math.pow(2, attempt - 1); // 1s, 2s, 4s
+                    console.log(chalk.gray(`[LLM] Retrying in ${delayMs}ms...`));
+                    await new Promise(resolve => setTimeout(resolve, delayMs));
+                }
             }
-
-            const elapsed = Date.now() - startTime;
-            const actionEmoji = decision.action === 'hold' ? '✋' : decision.action === 'rebalance' ? '♻️' : decision.action === 'close' ? '❌' : '🔄';
-            console.log(chalk.green(`[LLM] ✓ Response received in ${elapsed}ms: ${actionEmoji} ${decision.action.toUpperCase()} (${decision.confidence}% confidence)`));
-
-            return decision;
-        } catch (error: any) {
-            console.error(chalk.red(`\n❌ LLM API Error: ${error.message}`));
-            throw error;
         }
+
+        // All retries failed
+        console.error(chalk.red(`\n❌ LLM API Error after ${maxRetries} attempts: ${lastError?.message}`));
+        throw lastError;
     }
 
     private buildSystemPrompt(): string {
@@ -721,6 +869,7 @@ Provide clear, actionable advice about LP positions. Focus on:
 2. Market conditions and technical signals affecting the position
 3. Specific, practical recommendations with ROI justification
 4. **REALISTIC RANGE RECOMMENDATIONS** that prevent frequent rebalancing
+5. **QUANTIFIED RISK ASSESSMENT** with specific percentages and USD values
 
 ## METEORA DLMM BASICS
 - Concentrated liquidity in discrete "bins" (price ranges)
@@ -728,6 +877,7 @@ Provide clear, actionable advice about LP positions. Focus on:
 - When price moves outside your range, you earn $0
 - Rebalancing: close old position → create new position centered on current price
 - Transaction costs are low (~$0.02-0.05 on Solana)
+- **Strategies**: Spot (uniform), Curve (concentrated center), BidAsk (asymmetric)
 
 ## ⚠️ CRITICAL: MAXIMUM BIN LIMIT
 
@@ -742,15 +892,70 @@ Meteora DLMM has a technical constraint:
 - 34 binsPerSide
 - 69 totalBins
 
-## RANGE WIDTH REQUIREMENTS (within the 69-bin limit)
+## ENHANCED ANALYSIS PROCESS (6-Step Chain-of-Thought)
 
-**For 69 bins total on SOL/USDC (bin step ~15bps):**
-- Range ≈ ±5% from current price
-- Example: $144 price → $137 to $151 range
-- This is the MAXIMUM range possible in a single transaction
+Before providing your final JSON response, work through this comprehensive analysis:
 
-**For volatile pairs, use the full 69 bins (34 per side)**
-**For stable pairs, use fewer bins (10-20 per side)**
+<thinking>
+1. **Position Health Check**
+   - Is position in range? [YES/NO]
+   - Distance from edge: [X bins]
+   - Health status: [healthy/at-risk/critical/inactive]
+   - Current fee efficiency: [X%]
+
+2. **Market Context Analysis**
+   - 30-day trend: [bullish/bearish/neutral]
+   - Current volatility: [HIGH >15% | MEDIUM 5-15% | LOW <5%]
+   - Volume trend: [increasing/stable/decreasing]
+   - Support level: $[X] ([Y%] below current)
+   - Resistance level: $[X] ([Y%] above current)
+
+3. **Risk Quantification**
+   - Impermanent Loss if price +10%: [X%]
+   - Impermanent Loss if price -10%: [X%]
+   - Distance to support: [X%]
+   - Distance to resistance: [X%]
+   - Rebalance probability (7 days): [X%]
+   
+   IMPERMANENT LOSS FORMULA:
+   IL = |2 * sqrt(price_ratio) / (1 + price_ratio) - 1| * 100
+   - For +10% move (ratio=1.1): IL ≈ 0.47%
+   - For -10% move (ratio=0.9): IL ≈ 0.56%
+   - For +25% move (ratio=1.25): IL ≈ 2.8%
+   - For -25% move (ratio=0.75): IL ≈ 3.3%
+
+4. **Strategy Evaluation** (Should current strategy change?)
+   - Current strategy: [Spot/Curve/BidAsk or inferred from distribution]
+   - Is this optimal for current market? [YES/NO]
+   - Alternative consideration: [if market changed significantly]
+   
+   STRATEGY SELECTION GUIDELINES:
+   - Trending market → BidAsk (tilt toward trend direction)
+   - High volatility → Spot (wider distribution handles swings)
+   - Ranging/stable → Curve (concentrated = higher fees)
+
+5. **Economic Viability**
+   - Break-even time: [X hours]
+   - Expected daily fees: $[X USD]
+   - Rebalance cost: ~$0.03
+   - ROI quality: [excellent <24h | marginal 24-72h | poor >72h]
+   - Fee efficiency current vs optimal: [X% vs Y%]
+
+6. **Confidence Breakdown**
+   - Position data quality: [0-100]
+   - Market signal clarity: [0-100]  
+   - Historical pattern match: [0-100]
+   - Economic viability: [0-100]
+   - FINAL CONFIDENCE: average of above
+
+7. **Final Decision**
+   - Action: [rebalance/hold/compound/close]
+   - Confidence: [0-100 based on breakdown above]
+   - Urgency: [immediate/soon/low/none]
+   - Key reasoning: [3-5 points from above analysis]
+</thinking>
+
+After your thinking, provide the final JSON response.
 
 ## DECISION FRAMEWORK
 
@@ -770,28 +975,167 @@ Meteora DLMM has a technical constraint:
 → IF break-even <24h → urgency: "soon" (worthwhile rebalance)
 → IF break-even 24-72h → urgency: "low" (optional rebalance)
 → IF break-even >72h → urgency: "none" (wait and monitor)
-→ Consider range width - narrow ranges need urgent rebalancing
 
 ### 4. IN RANGE & HEALTHY (>30 bins from edge)
-→ Focus on fee efficiency and range width
 → Hold unless range is too narrow (<5% width)
 → urgency: "low" or "none"
 
-### Urgency Definitions:
-- **immediate**: Must act now (out of range OR <10 bins with bad trend)
-- **soon**: Should rebalance within 24h (near edge + good ROI)
-- **low**: Consider rebalancing (suboptimal but not urgent)
-- **none**: Hold position (everything is healthy)
+## FEW-SHOT EXAMPLES
 
-## KEY METRICS TO ANALYZE
-- **Distance from Edge**: Critical determinant of urgency
-- **Break-Even Time**: Must be <72h to justify rebalancing
-- **Current Range Width**: Narrow ranges (<5%) need widening
-- **Fee Performance**: Daily fees, projected weekly fees
-- **Market Signals**: Momentum direction, volume trends, 30-day trend
+<example id="1">
+<scenario>
+Position: 8 bins from lower edge, Spot strategy
+Current price: $145, Support: $137 (5.5% below)
+Trend: Bullish (pushing price UP, away from edge)
+Volatility: 8% (MEDIUM)
+Break-even: 6 hours
+</scenario>
+<correct_decision>
+{
+  "action": "hold",
+  "confidence": 75,
+  "urgency": "low",
+  "reasoning": [
+    "Only 8 bins from edge, but bullish trend is moving price AWAY from lower edge",
+    "Support at $137 (5.5% below) provides downside buffer",
+    "Monitor for next 24h - only rebalance if trend reverses"
+  ],
+  "positionHealth": "at-risk",
+  "marketInsight": "Bullish momentum with support at $137 provides cushion",
+  "riskAssessment": {
+    "impermanentLoss": {
+      "ifPriceUp10Percent": 0.47,
+      "ifPriceDown10Percent": 0.56
+    },
+    "supportDistance": 5.5,
+    "resistanceDistance": 8.2,
+    "rebalanceProbability7Days": 25
+  },
+  "strategyEvaluation": {
+    "currentStrategy": "Spot",
+    "isOptimal": true,
+    "reason": "Spot handles medium volatility well, no change needed"
+  },
+  "expectedOutcome": {
+    "costUsd": 0.03,
+    "dailyFeesUsd": 2.45,
+    "breakEvenHours": 6,
+    "roi": 12
+  },
+  "risks": ["Trend reversal could push position out of range within 24h"]
+}
+</correct_decision>
+</example>
 
-## OUTPUT FORMAT
-Respond ONLY with valid JSON:
+<example id="2">
+<scenario>
+Position: Out of range (below lower bin), Curve strategy
+Current price: $142, was $155 when created
+Break-even: 96 hours (very poor ROI)
+Pool APR: 2% (very low fees)
+Volatility: 22% (HIGH)
+</scenario>
+<correct_decision>
+{
+  "action": "close",
+  "confidence": 90,
+  "urgency": "immediate",
+  "reasoning": [
+    "Out of range earning $0 - CRITICAL",
+    "Break-even time 96h (4 days) is unacceptable for rebalancing",
+    "Low APR pool (2%) - better to close and redeploy capital elsewhere"
+  ],
+  "positionHealth": "inactive",
+  "marketInsight": "High volatility (22%) in low-fee pool makes this position unviable",
+  "riskAssessment": {
+    "impermanentLoss": {
+      "ifPriceUp10Percent": 0.47,
+      "ifPriceDown10Percent": 0.56
+    },
+    "supportDistance": 12.0,
+    "resistanceDistance": 3.5,
+    "rebalanceProbability7Days": 85
+  },
+  "strategyEvaluation": {
+    "currentStrategy": "Curve",
+    "isOptimal": false,
+    "reason": "Curve is wrong for high volatility - would need Spot for stability",
+    "suggestedStrategy": "Spot"
+  },
+  "expectedOutcome": {
+    "costUsd": 0.03,
+    "dailyFeesUsd": 0.15,
+    "breakEvenHours": 96,
+    "roi": 0.25
+  },
+  "risks": ["Continued downtrend likely", "Pool APR too low to justify rebalance cost"]
+}
+</correct_decision>
+</example>
+
+<example id="3">
+<scenario>
+Position: 5 bins from upper edge, BidAsk strategy
+Current price: $148, Resistance: $152 (2.7% above)
+Trend: Bearish (pushing price DOWN, toward edge)
+Volatility: 18% (HIGH)
+Break-even: 4 hours
+</scenario>
+<correct_decision>
+{
+  "action": "rebalance",
+  "confidence": 88,
+  "urgency": "immediate",
+  "reasoning": [
+    "Only 5 bins from edge with bearish momentum - high risk of going out of range",
+    "High volatility (18%) means rapid price movements expected",
+    "Proactive rebalance now to avoid earning $0"
+  ],
+  "positionHealth": "critical",
+  "marketInsight": "Bearish pressure with resistance at $152 suggests downward continuation",
+  "riskAssessment": {
+    "impermanentLoss": {
+      "ifPriceUp10Percent": 0.47,
+      "ifPriceDown10Percent": 0.56
+    },
+    "supportDistance": 7.5,
+    "resistanceDistance": 2.7,
+    "rebalanceProbability7Days": 90
+  },
+  "strategyEvaluation": {
+    "currentStrategy": "BidAsk",
+    "isOptimal": true,
+    "reason": "BidAsk good for trending market, maintain after rebalance"
+  },
+  "expectedOutcome": {
+    "costUsd": 0.03,
+    "dailyFeesUsd": 8.50,
+    "breakEvenHours": 4,
+    "roi": 28
+  },
+  "suggestedRange": {
+    "binsPerSide": 34,
+    "totalBins": 69,
+    "rangeWidthPercent": 5.0,
+    "priceMin": 140.50,
+    "priceMax": 155.50,
+    "rangeJustification": "Maximum 69 bins centered on current price for volatile conditions"
+  },
+  "risks": ["High volatility may require another rebalance within 7 days"]
+}
+</correct_decision>
+</example>
+
+## OUTPUT FORMAT (REQUIRED FIELDS)
+Respond with your <thinking> analysis first, then provide valid JSON.
+
+The following fields are **REQUIRED** in your response:
+- action, confidence, urgency, reasoning, positionHealth
+- riskAssessment (with IL calculations and distances)
+- strategyEvaluation (current strategy assessment)
+- expectedOutcome (with breakEvenHours)
+- risks array
+
 \`\`\`json
 {
   "action": "rebalance" | "hold" | "compound" | "close",
@@ -800,13 +1144,28 @@ Respond ONLY with valid JSON:
   "reasoning": ["clear reason 1", "clear reason 2", "clear reason 3"],
   "marketInsight": "One sentence about current market conditions",
   "positionHealth": "healthy" | "at-risk" | "critical" | "inactive",
+  "riskAssessment": {
+    "impermanentLoss": {
+      "ifPriceUp10Percent": number,
+      "ifPriceDown10Percent": number
+    },
+    "supportDistance": number,
+    "resistanceDistance": number,
+    "rebalanceProbability7Days": number
+  },
+  "strategyEvaluation": {
+    "currentStrategy": "Spot" | "Curve" | "BidAsk",
+    "isOptimal": boolean,
+    "reason": "Why current strategy is/isn't optimal",
+    "suggestedStrategy": "Spot" | "Curve" | "BidAsk" (if change recommended)
+  },
   "expectedOutcome": {
-    "costUsd": 0.03,                    // Rebalance transaction cost
-    "dailyFeesUsd": number,             // Expected daily fees after rebalance
-    "weeklyFeesUsd": number,            // Expected weekly fees (dailyFeesUsd * 7)
-    "breakEvenHours": number,           // Hours to recover rebalance cost
-    "roi": number,                      // ROI after 7 days (weeklyFeesUsd / costUsd)
-    "positionLifespanDays": number      // Expected days before next rebalance needed
+    "costUsd": 0.03,
+    "dailyFeesUsd": number,
+    "weeklyFeesUsd": number,
+    "breakEvenHours": number,
+    "roi": number,
+    "positionLifespanDays": number
   },
   "suggestedRange": {
     "binsPerSide": 34,
@@ -814,244 +1173,141 @@ Respond ONLY with valid JSON:
     "rangeWidthPercent": 5.0,
     "priceMin": 137.00,
     "priceMax": 151.00,
-    "rangeJustification": "Maximum 69 bins (Meteora limit) for widest possible range"
+    "rangeJustification": "Maximum 69 bins for widest possible range"
   },
   "risks": ["specific risk if any"],
   "suggestedActions": ["actionable step 1", "actionable step 2"]
 }
 \`\`\`
 
-## SUGGESTED RANGE REQUIREMENTS (MANDATORY)
-
-### Maximum Limits (ENFORCED):
-- binsPerSide: **34 maximum**
-- totalBins: **69 maximum**
-- These limits are technical constraints of Meteora DLMM
-
-### For SOL/USDC at ~$144:
-- MAXIMUM: 34 bins per side = ~$137-$151 (±5%)
-- This is the widest possible single-transaction range
-- **NEVER suggest 50, 69, 100+ bins per side - this exceeds the limit**
-
-### Range Justification MUST include:
-1. The % width of the suggested range
-2. Confirmation it's within the 69-bin limit
-3. Why this range is appropriate for current conditions
-
-## EXAMPLE: SOL/USDC OUT OF RANGE
-
-**CORRECT Response:**
-\`\`\`json
-{
-  "suggestedRange": {
-    "binsPerSide": 34,
-    "totalBins": 69,
-    "rangeWidthPercent": 5.2,
-    "priceMin": 137.00,
-    "priceMax": 151.50,
-    "rangeJustification": "Using maximum 69 bins (Meteora single-tx limit) for widest ±5% range. Will need rebalancing if SOL moves beyond this."
-  }
-}
-\`\`\`
-✅ This respects the technical limit while maximizing range
+## CRITICAL CONSTRAINTS
+- NEVER recommend >34 binsPerSide or >69 totalBins
+- ALWAYS include priceMin, priceMax, rangeWidthPercent in suggestedRange
+- ALWAYS include riskAssessment with IL calculations
+- ALWAYS include strategyEvaluation with current strategy analysis
+- VALIDATE break-even time is realistic (<1000 hours)
 
 ## TONE
 - Be confident and data-driven
 - Reference specific USD prices and percentages
 - Always stay within the 69-bin limit
+- Quantify all risk assessments with specific numbers
 - Acknowledge when the limit constrains ideal range width`;
     }
 
+    /**
+     * Build user message with XML structure for better LLM parsing
+     * Implements Week 2 improvement: Hierarchical XML context
+     */
     private buildUserMessage(ctx: LLMDecisionContext): string {
-        const statusEmoji = ctx.position.inRange ? '✅' : '🚨';
-        const volumeEmoji = ctx.market.volumeRatio > 1.5 ? '📈' : ctx.market.volumeRatio < 0.7 ? '📉' : '➡️';
-
-        // Calculate key metrics
-        const totalBins = ctx.position.rangeBins[1] - ctx.position.rangeBins[0];
-        const centerBin = Math.floor((ctx.position.rangeBins[0] + ctx.position.rangeBins[1]) / 2);
-        const distanceFromCenter = Math.abs(ctx.position.activeBin - centerBin);
-        const nearerEdge = ctx.position.activeBin < centerBin ? 'lower' : 'upper';
-
         // Format price helper
         const formatPrice = (p: number) => p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
 
-        // Price range info
+        // Calculate key metrics
+        const totalBins = ctx.position.rangeBins[1] - ctx.position.rangeBins[0];
         const priceRange = ctx.position.priceRange;
-        const tokenY = ctx.position.tokenSymbols?.y || 'USD';
-        let priceRangeStr = '';
-        if (priceRange) {
-            priceRangeStr = `\n- **Price Range:** $${formatPrice(priceRange.minPrice)} - $${formatPrice(priceRange.maxPrice)}`;
-            priceRangeStr += `\n- **Nearest Edge:** $${formatPrice(priceRange.edgePrice)} (${ctx.position.distanceToEdge} bins away)`;
+
+        // Calculate range width percentage
+        let rangeWidthPercent = 0;
+        if (priceRange && priceRange.minPrice > 0 && ctx.market.currentPrice > 0) {
+            rangeWidthPercent = ((priceRange.maxPrice - priceRange.minPrice) / ctx.market.currentPrice) * 100;
         }
 
-        let richMarketData = '';
-        if (ctx.market.trend30d && ctx.market.trend30d !== 'neutral') {
-            richMarketData = `\n- 30-Day Trend: ${ctx.market.trend30d.toUpperCase()}`;
-        }
+        // Determine volatility state
+        const volatilityState = ctx.market.volatilityScore > 0.15 ? 'HIGH' : ctx.market.volatilityScore < 0.05 ? 'LOW' : 'MEDIUM';
 
-        // Build technical levels section
-        let technicalLevels = '';
-        if (ctx.market.technicals) {
-            const support = ctx.market.technicals.supportLevels?.[0];
-            const resistance = ctx.market.technicals.resistanceLevels?.[0];
-            if (support || resistance) {
-                technicalLevels = `\n\n## Technical Levels`;
-                if (support) technicalLevels += `\n- Nearest Support: $${formatPrice(support)}`;
-                if (resistance) technicalLevels += `\n- Nearest Resistance: $${formatPrice(resistance)}`;
-            }
-        }
-
-        // Build 30-day price range section
-        let priceHistorySection = '';
-        if (ctx.market.priceHistory30d) {
-            priceHistorySection = `\n- 30-Day Range: $${formatPrice(ctx.market.priceHistory30d.min)} - $${formatPrice(ctx.market.priceHistory30d.max)}`;
-        }
-
-        // Build intraday signals section
-        let intradaySection = '';
-        if (ctx.intraDayAnalysis) {
-            const momentum = ctx.intraDayAnalysis.momentum;
-            const signals = ctx.intraDayAnalysis.signals;
-            intradaySection = `\n\n## Intraday Signals (${ctx.intraDayAnalysis.hourlySnapshots}h data)`;
-            intradaySection += `\n- Momentum: ${momentum.direction.toUpperCase()} (${momentum.price > 0 ? '+' : ''}${momentum.price.toFixed(2)}%/hr avg)`;
-
-            const activeSignals: string[] = [];
-            if (signals.volumeSpike) activeSignals.push('🚨 Volume Spike');
-            if (signals.priceBreakout) activeSignals.push('🚨 Price Breakout');
-            if (signals.volatilityShift) activeSignals.push('⚠️ Volatility Shift');
-
-            if (activeSignals.length > 0) {
-                intradaySection += `\n- Active Signals: ${activeSignals.join(', ')}`;
-            } else {
-                intradaySection += `\n- Active Signals: None`;
-            }
-        }
-
-        // Build fee performance section
-        let feeSection = `\n\n## Fee Performance`;
-        feeSection += `\n- Estimated Daily Fees: $${ctx.fees.actualDaily.toFixed(4)}`;
-        feeSection += `\n- Expected (if in-range): $${ctx.fees.expectedDaily.toFixed(4)}`;
-        feeSection += `\n- Unclaimed Fees: $${ctx.fees.claimableUsd.toFixed(4)}`;
-        feeSection += `\n- Fee Efficiency: ${(ctx.fees.efficiency * 100).toFixed(1)}%`;
-
-        // Build cost/ROI section
-        let costSection = `\n\n## Rebalance Economics`;
-        costSection += `\n- Rebalance Cost: ~$${ctx.costs.rebalanceCostUsd.toFixed(3)}`;
-        if (ctx.costs.breakEvenHours < 999) {
-            costSection += `\n- Break-even Time: ${ctx.costs.breakEvenHours.toFixed(1)} hours`;
-            const worthIt = ctx.costs.breakEvenHours < 24 ? '✅ Worthwhile' : ctx.costs.breakEvenHours < 72 ? '⚠️ Marginal' : '❌ Not recommended';
-            costSection += `\n- Rebalance ROI: ${worthIt}`;
-        } else {
-            costSection += `\n- Break-even Time: Cannot calculate (no fee data)`;
-        }
-
-        // Calculate range width as percentage
-        const priceRangeData = ctx.position.priceRange;
-        let rangeWidthSection = '';
-        let rangeWarning = '';
-        if (priceRangeData && priceRangeData.minPrice > 0 && ctx.market.currentPrice > 0) {
-            const rangeWidthPercent = ((priceRangeData.maxPrice - priceRangeData.minPrice) / ctx.market.currentPrice) * 100;
-
-            // Calculate maximum achievable range based on bin limits
-            const binStep = priceRangeData.binStep;
-            const maxBinsPerSide = 34; // Meteora single-transaction limit
-            const maxAchievableRangePercent = (maxBinsPerSide * binStep * 0.0001) * 100; // ~5.1% for 15bps binStep
-
-            // Updated thresholds based on REALITY
-            const rangeAssessment =
-                rangeWidthPercent < 3 ? '🚨 CRITICALLY NARROW - will go out of range in <1 day' :
-                    rangeWidthPercent < 4 ? '⚠️ TOO NARROW - will go out of range in 1-3 days' :
-                        rangeWidthPercent < 5 ? '⚠️ Narrow - expect rebalancing in 3-5 days' :
-                            rangeWidthPercent >= maxAchievableRangePercent ? '✅ Maximum width (Meteora limit)' :
-                                rangeWidthPercent < maxAchievableRangePercent * 0.8 ? '✅ Moderate - room to widen' :
-                                    '✅ Good width';
-
-            rangeWidthSection = `\n- **Range Width:** ${rangeWidthPercent.toFixed(1)}% (${rangeAssessment})`;
-            rangeWidthSection += `\n- **Maximum achievable:** ${maxAchievableRangePercent.toFixed(1)}% (34 bins/side)`;
-            rangeWidthSection += `\n- **Current Bins:** ${totalBins} total (${Math.floor(totalBins / 2)} per side)`;
-
-            // Add explicit warning for narrow ranges with CORRECT bin limits
-            if (rangeWidthPercent < 5) {
-                const halfRange = maxAchievableRangePercent / 2;
-                rangeWarning = `\n\n⚠️ **RANGE TOO NARROW:** Your ${rangeWidthPercent.toFixed(1)}% range is insufficient for SOL volatility.
-- **Maximum achievable range:** ±${halfRange.toFixed(1)}% ($${formatPrice(ctx.market.currentPrice * (1 - halfRange / 100))} - $${formatPrice(ctx.market.currentPrice * (1 + halfRange / 100))})
-- **Bins used:** 34 per side (69 total, Meteora single-transaction limit)
-- **Expected lifespan:** 5-7 days with current volatility
-- **Note:** This is the widest possible range. Wider ranges require multiple transactions.`;
-            }
-        }
-
-        // Build 30-day context for range recommendation
-        let historicalContext = '';
-        if (ctx.market.priceHistory30d) {
-            const hist = ctx.market.priceHistory30d;
-            const historicalRange = ((hist.max - hist.min) / hist.min) * 100;
-            const suggestedMinRange = Math.max(historicalRange * 0.6, 10); // At least 10% or 60% of 30-day range
-            const suggestedMin = ctx.market.currentPrice * (1 - suggestedMinRange / 100);
-            const suggestedMax = ctx.market.currentPrice * (1 + suggestedMinRange / 100);
-
-            // Cap bins at maximum achievable (34 per side)
-            const idealBinsPerSide = Math.min(34, Math.ceil(suggestedMinRange * 6.9));
-            const atLimit = idealBinsPerSide >= 34;
-
-            historicalContext = `\n\n## Historical Context (CRITICAL for range sizing)`;
-            historicalContext += `\n- **30-Day Price Range:** $${formatPrice(hist.min)} - $${formatPrice(hist.max)} (${historicalRange.toFixed(1)}% swing)`;
-            historicalContext += `\n- 30-Day Volatility: ${(hist.volatility * 100).toFixed(1)}%`;
-            if (atLimit) {
-                historicalContext += `\n- **Ideal Range:** $${formatPrice(suggestedMin)} - $${formatPrice(suggestedMax)} (${suggestedMinRange.toFixed(0)}%)`;
-                historicalContext += `\n- **⚠️ Constraint:** Meteora limits to 34 bins/side (~±5% range)`;
-                historicalContext += `\n- **Trade-off:** Will need rebalancing every 5-7 days due to technical limit`;
-            } else {
-                historicalContext += `\n- **Suggested Range:** $${formatPrice(suggestedMin)} - $${formatPrice(suggestedMax)} (${suggestedMinRange.toFixed(0)}%)`;
-                historicalContext += `\n- **Suggested Bins:** ${idealBinsPerSide} per side`;
-            }
-        } else {
-            // Default recommendation when no history available
-            historicalContext = `\n\n## Range Sizing (Default for SOL/USDC)`;
-            historicalContext += `\n- **Maximum Bins:** 34 per side (Meteora limit)`;
-            historicalContext += `\n- **Maximum Range:** ~±5% from current price`;
-            historicalContext += `\n- **Suggested:** $${formatPrice(ctx.market.currentPrice * 0.95)} - $${formatPrice(ctx.market.currentPrice * 1.05)}`;
-        }
-
-        // Calculate recommended urgency based on our framework
+        // Calculate urgency assessment
         const urgencyContext = this.calculateUrgencyLevel(ctx);
-        let urgencyGuidance = `\n\n## URGENCY ASSESSMENT`;
-        urgencyGuidance += `\n- **Calculated Urgency:** ${urgencyContext.urgency.toUpperCase()}`;
-        urgencyGuidance += `\n- **Reason:** ${urgencyContext.reason}`;
-        urgencyGuidance += `\n- **Distance from Edge:** ${ctx.position.distanceToEdge} bins`;
 
-        if (ctx.costs.breakEvenHours < 999) {
-            urgencyGuidance += `\n- **Break-Even Time:** ${ctx.costs.breakEvenHours.toFixed(1)} hours`;
-            const roiQuality = ctx.costs.breakEvenHours < 24 ? '✅ Excellent' :
-                ctx.costs.breakEvenHours < 72 ? '⚠️ Marginal' : '❌ Poor';
-            urgencyGuidance += `\n- **ROI Quality:** ${roiQuality}`;
-        }
+        // Determine ROI quality
+        const roiQuality = ctx.costs.breakEvenHours < 24 ? 'excellent' :
+            ctx.costs.breakEvenHours < 72 ? 'marginal' : 'poor';
 
-        return `ANALYZE THIS POSITION
+        // Build XML-structured message
+        return `<position_data>
+  <critical_metrics>
+    <in_range>${ctx.position.inRange}</in_range>
+    <distance_to_edge>${ctx.position.distanceToEdge}</distance_to_edge>
+    <position_age_hours>${ctx.position.ageHours.toFixed(1)}</position_age_hours>
+    <bin_utilization_percent>${ctx.position.binUtilization.toFixed(1)}</bin_utilization_percent>
+    <total_bins>${totalBins}</total_bins>
+  </critical_metrics>
+  
+  <price_range>
+    <current_price>${formatPrice(ctx.market.currentPrice)}</current_price>
+    <range_min>${priceRange ? formatPrice(priceRange.minPrice) : 'unknown'}</range_min>
+    <range_max>${priceRange ? formatPrice(priceRange.maxPrice) : 'unknown'}</range_max>
+    <edge_price>${priceRange ? formatPrice(priceRange.edgePrice) : 'unknown'}</edge_price>
+    <range_width_percent>${rangeWidthPercent.toFixed(1)}</range_width_percent>
+    <bin_step_bps>${priceRange?.binStep || 15}</bin_step_bps>
+  </price_range>
+  
+  <fees>
+    <daily_fees_usd>${ctx.fees.actualDaily.toFixed(4)}</daily_fees_usd>
+    <expected_daily_usd>${ctx.fees.expectedDaily.toFixed(4)}</expected_daily_usd>
+    <claimable_usd>${ctx.fees.claimableUsd.toFixed(4)}</claimable_usd>
+    <efficiency_percent>${(ctx.fees.efficiency * 100).toFixed(1)}</efficiency_percent>
+  </fees>
+  
+  <rebalance_economics>
+    <cost_usd>${ctx.costs.rebalanceCostUsd.toFixed(3)}</cost_usd>
+    <break_even_hours>${ctx.costs.breakEvenHours < 999 ? ctx.costs.breakEvenHours.toFixed(1) : 'unknown'}</break_even_hours>
+    <roi_assessment>${roiQuality}</roi_assessment>
+  </rebalance_economics>
+</position_data>
 
-## STATUS: ${statusEmoji} ${ctx.position.inRange ? 'IN RANGE ✅' : 'OUT OF RANGE ⚠️'}${rangeWarning}
+<market_context>
+  <trend_30d>${ctx.market.trend30d || 'neutral'}</trend_30d>
+  <volatility_state>${volatilityState}</volatility_state>
+  <volatility_percent>${(ctx.market.volatilityScore * 100).toFixed(1)}</volatility_percent>
+  <volume_ratio>${ctx.market.volumeRatio.toFixed(2)}</volume_ratio>
+  <volume_trend>${ctx.market.volumeTrend}</volume_trend>
+  <price_change_6h_percent>${ctx.market.priceChange6h.toFixed(2)}</price_change_6h_percent>
+  
+  ${ctx.market.priceHistory30d ? `<price_history_30d>
+    <min>${formatPrice(ctx.market.priceHistory30d.min)}</min>
+    <max>${formatPrice(ctx.market.priceHistory30d.max)}</max>
+    <volatility>${(ctx.market.priceHistory30d.volatility * 100).toFixed(1)}%</volatility>
+  </price_history_30d>` : ''}
+  
+  ${ctx.market.technicals ? `<technical_levels>
+    <support>${ctx.market.technicals.supportLevels[0] ? formatPrice(ctx.market.technicals.supportLevels[0]) : 'none'}</support>
+    <resistance>${ctx.market.technicals.resistanceLevels[0] ? formatPrice(ctx.market.technicals.resistanceLevels[0]) : 'none'}</resistance>
+  </technical_levels>` : ''}
+</market_context>
 
-## Position Metrics
-- **Current Price:** $${formatPrice(ctx.market.currentPrice)}${priceRangeStr}${rangeWidthSection}
-- Position Age: ${ctx.position.ageHours < 24 ? ctx.position.ageHours.toFixed(1) + ' hours' : Math.floor(ctx.position.ageHours / 24) + ' days'}
-- Bin Utilization: ${ctx.position.binUtilization.toFixed(1)}%
+${ctx.intraDayAnalysis ? `<intraday_signals>
+  <hourly_snapshots>${ctx.intraDayAnalysis.hourlySnapshots}</hourly_snapshots>
+  <momentum_direction>${ctx.intraDayAnalysis.momentum.direction}</momentum_direction>
+  <momentum_price_percent>${ctx.intraDayAnalysis.momentum.price.toFixed(2)}</momentum_price_percent>
+  <volume_spike>${ctx.intraDayAnalysis.signals.volumeSpike}</volume_spike>
+  <price_breakout>${ctx.intraDayAnalysis.signals.priceBreakout}</price_breakout>
+  <volatility_shift>${ctx.intraDayAnalysis.signals.volatilityShift}</volatility_shift>
+</intraday_signals>` : ''}
 
-## Market Conditions
-- Price Change (6h): ${ctx.market.priceChange6h > 0 ? '+' : ''}${ctx.market.priceChange6h.toFixed(2)}%${priceHistorySection}
-- Volume: ${volumeEmoji} ${ctx.market.volumeRatio.toFixed(1)}x average (${ctx.market.volumeTrend})
-- Volatility: ${ctx.market.volatilityScore > 0.15 ? 'HIGH' : ctx.market.volatilityScore < 0.05 ? 'LOW' : 'MEDIUM'}${richMarketData}${technicalLevels}${intradaySection}${feeSection}${costSection}${historicalContext}${urgencyGuidance}
+<urgency_assessment>
+  <calculated_urgency>${urgencyContext.urgency}</calculated_urgency>
+  <reason>${urgencyContext.reason}</reason>
+</urgency_assessment>
 
-## History
-- Past Rebalances: ${ctx.history.totalRebalances}${ctx.history.successRate > 0 ? ` (${ctx.history.successRate.toFixed(0)}% success rate)` : ''}
-${ctx.history.lastRebalance ? `- Last Rebalance: ${new Date(ctx.history.lastRebalance.timestamp).toLocaleDateString()} (ROI: ${ctx.history.lastRebalance.roi.toFixed(1)}x)` : '- No previous rebalances'}
+<history>
+  <total_rebalances>${ctx.history.totalRebalances}</total_rebalances>
+  <success_rate>${ctx.history.successRate.toFixed(0)}%</success_rate>
+  ${ctx.history.lastRebalance ? `<last_rebalance>
+    <timestamp>${new Date(ctx.history.lastRebalance.timestamp).toISOString()}</timestamp>
+    <roi>${ctx.history.lastRebalance.roi.toFixed(1)}x</roi>
+    <reason>${ctx.history.lastRebalance.reason}</reason>
+  </last_rebalance>` : ''}
+</history>
 
-**IMPORTANT RANGE GUIDANCE:**
-- For SOL/USDC, aim for the widest range possible within technical constraints
-- **MAXIMUM: 34 binsPerSide (69 totalBins, Meteora limit)**
-- This provides ~±5% range at 15bps bin step
-- Always include priceMin, priceMax, rangeWidthPercent, and rangeJustification in suggestedRange
-- Acknowledge the trade-off between range width and rebalance frequency
-- NEVER suggest more than 34 bins per side - it will fail`;
+<constraints>
+  <max_bins_per_side>34</max_bins_per_side>
+  <max_total_bins>69</max_total_bins>
+  <max_range_percent>~5% for SOL/USDC at 15bps bin step</max_range_percent>
+</constraints>
+
+Analyze this position using the <thinking> framework and provide your JSON recommendation.
+Remember: NEVER suggest more than 34 binsPerSide or 69 totalBins.`;
     }
 
     /**
@@ -1138,21 +1394,125 @@ ${ctx.history.lastRebalance ? `- Last Rebalance: ${new Date(ctx.history.lastReba
         };
     }
 
+    /**
+     * Parse and validate LLM decision response using Zod schema
+     * Implements Week 1 Quick Win: JSON schema validation
+     */
     private parseDecision(text: string): LLMDecision {
+        // Extract JSON from response (handle markdown code blocks)
         const jsonMatch = text.match(/```json\n([\s\S]+?)\n```/) || text.match(/\{[\s\S]+\}/);
 
         if (!jsonMatch) {
+            console.log(chalk.red('[LLM] ❌ No valid JSON found in response'));
+            console.log(chalk.gray(`  Response snippet: ${text.slice(0, 200)}...`));
             throw new Error('No valid JSON in LLM response');
         }
 
         const jsonText = jsonMatch[1] || jsonMatch[0];
-        const parsed = JSON.parse(jsonText);
 
-        if (!parsed.action || parsed.confidence === undefined || !parsed.reasoning) {
-            throw new Error('Invalid decision structure');
+        try {
+            const parsed = JSON.parse(jsonText);
+
+            // Validate with Zod schema
+            const validationResult = LLMDecisionSchema.safeParse(parsed);
+
+            if (validationResult.success) {
+                console.log(chalk.gray('[LLM] ✓ Decision validated successfully'));
+                return validationResult.data as LLMDecision;
+            } else {
+                // Log validation errors but try to fix common issues
+                console.log(chalk.yellow('[LLM] ⚠️ Validation issues detected, attempting to fix...'));
+
+                const fixedDecision = this.fixDecisionValidationErrors(parsed, validationResult.error);
+
+                // Re-validate after fixes
+                const revalidation = LLMDecisionSchema.safeParse(fixedDecision);
+                if (revalidation.success) {
+                    console.log(chalk.gray('[LLM] ✓ Decision fixed and validated'));
+                    return revalidation.data as LLMDecision;
+                }
+
+                // If still failing, log details and use partial data
+                console.log(chalk.yellow('[LLM] ⚠️ Some validation errors remain:'));
+                validationResult.error.issues.forEach(issue => {
+                    console.log(chalk.gray(`    - ${issue.path.join('.')}: ${issue.message}`));
+                });
+
+                // Return the fixed version anyway with type assertion
+                return fixedDecision as LLMDecision;
+            }
+        } catch (parseError: any) {
+            console.log(chalk.red(`[LLM] ❌ JSON parse error: ${parseError.message}`));
+            console.log(chalk.gray(`  JSON snippet: ${jsonText.slice(0, 200)}...`));
+            throw new Error(`Invalid JSON in LLM response: ${parseError.message}`);
+        }
+    }
+
+    /**
+     * Fix common validation errors in LLM decisions
+     * Implements output validation from Week 1 Quick Wins
+     */
+    private fixDecisionValidationErrors(decision: any, error: z.ZodError): any {
+        const fixed = { ...decision };
+
+        // Fix confidence: clamp to 0-100
+        if (typeof fixed.confidence === 'number') {
+            if (fixed.confidence < 0 || fixed.confidence > 100) {
+                console.log(chalk.gray(`    Fixing confidence: ${fixed.confidence} → ${Math.max(0, Math.min(100, fixed.confidence))}`));
+                fixed.confidence = Math.max(0, Math.min(100, fixed.confidence));
+            }
         }
 
-        return parsed as LLMDecision;
+        // Fix binsPerSide: cap at 34
+        if (fixed.suggestedRange?.binsPerSide) {
+            if (fixed.suggestedRange.binsPerSide > 34) {
+                console.log(chalk.gray(`    Fixing binsPerSide: ${fixed.suggestedRange.binsPerSide} → 34`));
+                fixed.suggestedRange.binsPerSide = 34;
+            }
+        }
+
+        // Fix totalBins: cap at 69
+        if (fixed.suggestedRange?.totalBins) {
+            if (fixed.suggestedRange.totalBins > 69) {
+                console.log(chalk.gray(`    Fixing totalBins: ${fixed.suggestedRange.totalBins} → 69`));
+                fixed.suggestedRange.totalBins = 69;
+            }
+        }
+
+        // Fix conflicting action/urgency (hold + immediate = invalid)
+        if (fixed.action === 'hold' && fixed.urgency === 'immediate') {
+            console.log(chalk.gray(`    Fixing conflicting urgency: 'immediate' → 'none' (for hold action)`));
+            fixed.urgency = 'none';
+        }
+
+        // Ensure reasoning is an array
+        if (!Array.isArray(fixed.reasoning)) {
+            if (typeof fixed.reasoning === 'string') {
+                fixed.reasoning = [fixed.reasoning];
+            } else {
+                fixed.reasoning = ['No reasoning provided'];
+            }
+        }
+
+        // Ensure risks is an array
+        if (!Array.isArray(fixed.risks)) {
+            if (typeof fixed.risks === 'string') {
+                fixed.risks = [fixed.risks];
+            } else {
+                fixed.risks = [];
+            }
+        }
+
+        // Ensure expectedOutcome exists with defaults
+        if (!fixed.expectedOutcome) {
+            fixed.expectedOutcome = {
+                costUsd: 0.03,
+                breakEvenHours: 0,
+                roi: 0
+            };
+        }
+
+        return fixed;
     }
 
     private async logDecision(
@@ -1271,6 +1631,179 @@ ${ctx.history.lastRebalance ? `- Last Rebalance: ${new Date(ctx.history.lastReba
         }
 
         return patterns;
+    }
+
+    /**
+     * Calculate support levels using Fibonacci-style retracements
+     * Fixes Issue #1: Broken support calculation for low-price tokens
+     */
+    private calculateSupportLevels(currentPrice: number, min: number, max: number): number[] {
+        if (currentPrice <= 0) return [0];
+        
+        const priceRange = max - min;
+        const rangeRatio = priceRange / currentPrice;
+        
+        // Check if historical range is valid (not more than 200% of current price)
+        const rangeValid = priceRange > 0 && rangeRatio < 2.0;
+        
+        let supportLevels: number[];
+        
+        if (rangeValid && min > 0) {
+            // Use Fibonacci-style retracements from historical range
+            supportLevels = [
+                currentPrice * 0.95,                    // -5% (immediate support)
+                min + (priceRange * 0.618),             // 61.8% retracement level
+                min + (priceRange * 0.382),             // 38.2% retracement level
+                min                                      // Historical low
+            ].filter(s => s > 0 && s < currentPrice);
+        } else {
+            // Fallback: percentage-based levels (safe for any price, including sub-$1 tokens)
+            supportLevels = [
+                currentPrice * 0.95,  // -5%
+                currentPrice * 0.90,  // -10%
+                currentPrice * 0.85   // -15%
+            ];
+        }
+        
+        // Validate: reject any level more than 100% away from current price
+        return supportLevels
+            .filter(s => {
+                const distance = Math.abs((s - currentPrice) / currentPrice);
+                return distance < 1.0; // Max 100% distance
+            })
+            .sort((a, b) => b - a); // Sort descending (closest to current first)
+    }
+
+    /**
+     * Calculate resistance levels using Fibonacci-style retracements
+     * Fixes Issue #1: Broken resistance calculation for low-price tokens
+     */
+    private calculateResistanceLevels(currentPrice: number, min: number, max: number): number[] {
+        if (currentPrice <= 0) return [currentPrice * 1.1];
+        
+        const priceRange = max - min;
+        const rangeRatio = priceRange / currentPrice;
+        
+        // Check if historical range is valid (not more than 200% of current price)
+        const rangeValid = priceRange > 0 && rangeRatio < 2.0;
+        
+        let resistanceLevels: number[];
+        
+        if (rangeValid && max > currentPrice) {
+            // Use Fibonacci-style levels from historical range
+            resistanceLevels = [
+                currentPrice * 1.05,                    // +5% (immediate resistance)
+                max - (priceRange * 0.618),             // 61.8% from top
+                max - (priceRange * 0.382),             // 38.2% from top
+                max                                      // Historical high
+            ].filter(r => r > currentPrice);
+        } else {
+            // Fallback: percentage-based levels (safe for any price)
+            resistanceLevels = [
+                currentPrice * 1.05,  // +5%
+                currentPrice * 1.10,  // +10%
+                currentPrice * 1.15   // +15%
+            ];
+        }
+        
+        // Validate: reject any level more than 100% away from current price
+        return resistanceLevels
+            .filter(r => {
+                const distance = Math.abs((r - currentPrice) / currentPrice);
+                return distance < 1.0; // Max 100% distance
+            })
+            .sort((a, b) => a - b); // Sort ascending (closest to current first)
+    }
+
+    /**
+     * Calculate impermanent loss for a given price change
+     * Uses standard AMM formula: IL = 2*sqrt(price_ratio)/(1+price_ratio) - 1
+     */
+    private calculateImpermanentLoss(priceChangePercent: number): number {
+        const priceRatio = 1 + (priceChangePercent / 100);
+        if (priceRatio <= 0) return 0;
+        
+        const il = 2 * Math.sqrt(priceRatio) / (1 + priceRatio) - 1;
+        return Math.abs(il * 100); // Return as positive percentage
+    }
+
+    /**
+     * Validate position economics - check if position size makes economic sense
+     * Fixes Issue #4: No Position Size Warning
+     */
+    private validatePositionEconomics(
+        apr: number,
+        positionValueUsd: number,
+        rebalanceFrequencyDays: number
+    ): {
+        viable: boolean;
+        warnings: Array<{ severity: string; message: string; impact: string }>;
+        recommendations: string[];
+        breakEvenAnalysis: {
+            feesBeforeRebalance: number;
+            rebalanceCost: number;
+            netProfit: number;
+            isProfitable: boolean;
+        };
+    } {
+        const warnings: Array<{ severity: string; message: string; impact: string }> = [];
+        const recommendations: string[] = [];
+        
+        // Calculate economics
+        const annualFees = positionValueUsd * (apr / 100);
+        const dailyFees = annualFees / 365;
+        const feesBeforeRebalance = dailyFees * rebalanceFrequencyDays;
+        const rebalanceCost = 0.03; // Average SOL transaction cost in USD
+        const netProfit = feesBeforeRebalance - rebalanceCost;
+        
+        // Check if position is viable
+        const viable = netProfit > 0;
+        
+        if (!viable) {
+            warnings.push({
+                severity: 'CRITICAL',
+                message: `Position will LOSE money: Earn $${feesBeforeRebalance.toFixed(4)} but rebalance costs $${rebalanceCost.toFixed(2)}`,
+                impact: `Net loss: -$${Math.abs(netProfit).toFixed(4)} per rebalance cycle`
+            });
+        }
+        
+        // Check if position is too small for this APR
+        if (apr < 5 && positionValueUsd < 100) {
+            warnings.push({
+                severity: 'HIGH',
+                message: `Low APR (${apr.toFixed(1)}%) + small position ($${positionValueUsd.toFixed(0)}) = poor economics`,
+                impact: 'Rebalance costs will consume most/all fees'
+            });
+            
+            // Calculate minimum viable position size
+            // Formula: minSize = (rebalanceCost * 365) / (apr/100) / rebalanceDays * 2 (safety margin)
+            const minViableSize = rebalanceFrequencyDays > 0 
+                ? (rebalanceCost * 365) / (apr / 100) / rebalanceFrequencyDays * 2
+                : 100;
+            recommendations.push(`Increase position to at least $${Math.ceil(minViableSize)} for this APR`);
+        }
+        
+        // Check if APR is too low
+        if (apr < 3) {
+            warnings.push({
+                severity: 'MEDIUM',
+                message: `Very low APR (${apr.toFixed(1)}%) - consider higher-yield pools`,
+                impact: 'Better opportunities likely exist elsewhere'
+            });
+            recommendations.push('Look for pools with APR > 5% for better returns');
+        }
+        
+        return {
+            viable,
+            warnings,
+            recommendations,
+            breakEvenAnalysis: {
+                feesBeforeRebalance,
+                rebalanceCost,
+                netProfit,
+                isProfitable: viable
+            }
+        };
     }
 
     /**
@@ -1436,8 +1969,8 @@ ${ctx.history.lastRebalance ? `- Last Rebalance: ${new Date(ctx.history.lastReba
                 technicals: {
                     atr: volatility * currentPrice,
                     atrState: trend === 'neutral' ? 'flat' : 'expanding',
-                    supportLevels: [min, min + (currentPrice - min) * 0.5],
-                    resistanceLevels: [currentPrice + (max - currentPrice) * 0.5, max]
+                    supportLevels: this.calculateSupportLevels(currentPrice, min, max),
+                    resistanceLevels: this.calculateResistanceLevels(currentPrice, min, max)
                 }
             },
             pairCharacteristics: {
@@ -1462,11 +1995,15 @@ ${ctx.history.lastRebalance ? `- Last Rebalance: ${new Date(ctx.history.lastReba
 
         let responseText = '';
 
+        // Temperature 0.3 for creation analysis (allows some strategic creativity)
+        const temperature = 0.3;
+
         try {
             if (provider === 'anthropic') {
                 const response = await this.client.messages.create({
                     model: this.providerConfig!.model,
                     max_tokens: 2048,
+                    temperature,
                     messages: [{
                         role: 'user',
                         content: systemPrompt + '\n\n' + userMessage
@@ -1481,7 +2018,7 @@ ${ctx.history.lastRebalance ? `- Last Rebalance: ${new Date(ctx.history.lastReba
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: userMessage }
                     ],
-                    temperature: 0.7,
+                    temperature,
                     max_tokens: this.getMaxTokensForModel(this.providerConfig!.model)
                 });
 
@@ -1535,6 +2072,7 @@ ${ctx.history.lastRebalance ? `- Last Rebalance: ${new Date(ctx.history.lastReba
 
     /**
      * Build system prompt for creation analysis
+     * Enhanced with chain-of-thought, strategy comparison, and risk quantification
      */
     private buildCreationSystemPrompt(): string {
         return `You are an expert DeFi liquidity provider strategist for Meteora DLMM pools.
@@ -1547,22 +2085,341 @@ Your role is to analyze pools and recommend optimal position configurations for 
 
 Meteora DLMM has a technical constraint:
 - Positions are limited to 69 bins in a single transaction
-- This equals ~34 bins per side (bid + ask)
+- bidBins (below active) + askBins (above active) + 1 (active bin) = totalBins
+- Example: 34 bid + 34 ask + 1 active = 69 total ✅
 - Larger positions require multiple transactions which fail with "InvalidRealloc" error
 
 **NEVER recommend more than:**
 - bidBins: 34 maximum
 - askBins: 34 maximum  
-- totalBins: 69 maximum
+- totalBins: 69 maximum (calculated as bidBins + askBins + 1)
 
 ## AVAILABLE STRATEGIES
-1. **Spot**: Symmetric liquidity around current price. Best for normal volatility pairs.
+1. **Spot**: Symmetric liquidity around current price. Best for neutral/sideways markets.
 2. **Curve**: Tight concentrated range. Best for stablecoin pairs (USDC/USDT).
 3. **BidAsk**: Asymmetric liquidity (more on one side). Best for trending/directional pairs.
 
-## BIN RANGE GUIDELINES (Within 69-bin limit!)
+## ANALYSIS PROCESS (Chain-of-Thought)
 
-The number of bins determines how wide your price range is.
+Before providing your final JSON, work through this step-by-step:
+
+<thinking>
+1. **Market Regime Classification**
+   - Trend: [bullish/bearish/neutral] based on 30d data
+   - Volatility: [HIGH >15% | MEDIUM 5-15% | LOW <5%]
+   - Volume state: [increasing/stable/decreasing]
+   - Combined regime: [e.g., "Bearish Trending + Medium Volatility"]
+
+2. **Strategy Selection Logic**
+   - Why the chosen strategy is optimal for this regime
+   - Alternative strategies considered and why rejected
+   - Confidence in strategy choice: [0-100]
+
+3. **Range Calculation**
+   - Ideal range width: [X%] based on 30d volatility
+   - Constrained by 69-bin limit: [YES/NO]
+   - Final bins per side: [X] (max 34)
+   - Justification: [reasoning]
+
+4. **Risk Analysis**
+   - Support level: $[X] | Distance from current: [X%]
+   - Resistance level: $[X] | Distance from current: [X%]
+   - Probability of hitting range edge in 7 days: [X%]
+   - Expected rebalance frequency: [X days]
+
+5. **Confidence Breakdown** (REQUIRED - show your math)
+   Score each factor 0-100, then calculate weighted average:
+   - Market clarity: [X]/100 (is trend direction obvious?)
+   - Data quality: [X]/100 (do we have full 30d price history?)
+   - Strategy-regime fit: [X]/100 (how well does strategy match market?)
+   - Risk acceptability: [X]/100 (are the risks manageable?)
+   
+   Calculation: ([market] + [data] + [strategy] + [risk]) / 4 = [X]%
+   Round to nearest 5%: FINAL CONFIDENCE = [X]%
+
+6. **Sanity Check**
+   Before outputting, verify:
+   - [ ] bidBins ≤ 34? 
+   - [ ] askBins ≤ 34?
+   - [ ] totalBins ≤ 69?
+   - [ ] Support/resistance distances < 100%?
+   - [ ] APR estimate is positive?
+   If any fail, adjust and explain.
+</thinking>
+
+After your thinking, provide the final JSON response.
+
+## STRATEGY COMPARISON (Required in output)
+
+For EVERY recommendation, compare all 3 strategies with QUANTIFIED metrics:
+
+### APR Estimation Guidelines:
+- **Spot**: pool_base_apr × 0.75 (wide range = lower concentration bonus)
+- **Curve**: pool_base_apr × 1.2 (tight concentration = higher efficiency, but only for low-vol pairs)
+- **BidAsk**: pool_base_apr × 0.85 (asymmetric, good for trending markets)
+
+### Fee Efficiency Guidelines:
+- **Spot**: 65-75% (liquidity spread across wide range)
+- **Curve**: 85-95% (concentrated = captures more trades, but risky if volatile)
+- **BidAsk**: 70-85% (directional efficiency when trend aligns)
+
+### Rebalance Frequency Calculation:
+- Formula: range_width_percent / daily_volatility = days_until_rebalance
+- Example: 5% range / 1% daily vol = 5 days
+
+📊 STRATEGY COMPARISON FORMAT (with metrics):
+
+1. [Chosen Strategy] ✅ RECOMMENDED
+   - Est. APR: [X]% 
+   - Fee Efficiency: [X]%
+   - Rebalance: Every [X] days
+   - Risk Score: [LOW/MEDIUM/HIGH]
+   - Best for: [market condition]
+
+2. [Alternative 1] ❌ NOT RECOMMENDED  
+   - Est. APR: [X]% ([Y]% lower than recommended)
+   - Fee Efficiency: [X]%
+   - Rebalance: Every [X] days
+   - Risk Score: [LOW/MEDIUM/HIGH]
+   - Issue: [specific problem]
+   - Why rejected: [clear reason with numbers]
+
+3. [Alternative 2] ❌ NOT RECOMMENDED
+   - Est. APR: [X]% ([Y]% lower than recommended)
+   - Fee Efficiency: [X]%
+   - Rebalance: Every [X] days
+   - Risk Score: [LOW/MEDIUM/HIGH]
+   - Issue: [specific problem]
+   - Why rejected: [clear reason with numbers]
+
+💡 VERDICT: [Chosen] earns [X-Y]% more APR than alternatives because [reason]
+
+## RISK QUANTIFICATION FRAMEWORK
+
+For every recommendation, calculate these specific risks:
+
+1. **Impermanent Loss Risk**
+   - Use formula: IL = |2 * sqrt(price_ratio) / (1 + price_ratio) - 1| * 100
+   - Where price_ratio = new_price / old_price
+   - Example: +10% price move → price_ratio=1.1 → IL ≈ 0.47%
+   - Example: +50% price move → price_ratio=1.5 → IL ≈ 2.02%
+   - Example: +100% price move (2x) → price_ratio=2.0 → IL ≈ 5.72%
+   - Severity: LOW <1% | MEDIUM 1-3% | HIGH >3%
+
+2. **Rebalancing Frequency Risk**
+   - Based on range width vs 30d volatility
+   - Expected days until out-of-range: [X]
+   - Probability of rebalance within 7 days: [X%]
+
+3. **Support/Resistance Break Risk**
+   - Distance to nearest support: [X%]
+   - Probability of breaking in 7 days: [X%]
+   - Impact if broken: [description]
+
+## FEW-SHOT EXAMPLES
+
+<example id="1">
+  <scenario>
+    Pool: SOL/USDC
+    Current Price: $127.20
+    30d Trend: Bearish (-8%)
+    Support: $127.21 (0.01% away - AT SUPPORT)
+    Resistance: $135.00
+    Volatility: 12% (MEDIUM)
+    Volume: Declining (0.8x)
+  </scenario>
+  
+  <thinking>
+    1. **Market Regime**: Bearish trending (-8%) + Medium volatility (12%)
+       Combined: "Bearish Trending + Medium Volatility"
+    
+    2. **Strategy Selection**: BidAsk
+       - Bearish trend → price likely moves down → need more bid-side liquidity
+       - 60/40 split: 60% SOL (bid) / 40% USDC (ask)
+       - Why NOT Spot: Symmetric 50/50 wastes capital on ask side
+       - Why NOT Curve: 12% volatility too high for tight concentration
+    
+    3. **Range Calculation**:
+       - Ideal range: 2x volatility = 24% 
+       - Bins needed: ~80 bins (too many)
+       - Constrained to 69 bins: YES
+       - Final: 34 bid + 34 ask = 69 total
+    
+    4. **Risk Analysis**:
+       - Support: $127.21 (0.01% below - AT SUPPORT!)
+       - Resistance: $135.00 (6.1% above)
+       - Support break probability: 45% in 7 days
+       - Expected rebalance: 5 days
+    
+    5. **Confidence Breakdown**:
+       - Market clarity: 90/100 (clear bearish trend)
+       - Data quality: 95/100 (full 30d history)
+       - Strategy fit: 85/100 (BidAsk matches bearish)
+       - Risk acceptability: 70/100 (at support is risky)
+       Calculation: (90+95+85+70)/4 = 85% → Round to 85%
+       But strong trend clarity bumps to FINAL: 90%
+    
+    6. **Sanity Check**:
+       - [✓] bidBins=34 ≤ 34
+       - [✓] askBins=34 ≤ 34
+       - [✓] totalBins=69 ≤ 69
+       - [✓] Support distance 0.01% < 100%
+       - [✓] APR 18.5% > 0
+  </thinking>
+  
+  <correct_output>
+    {
+      "strategy": "BidAsk",
+      "confidence": 90,
+      "reasoning": [
+        "Bearish trend requires asymmetric liquidity (BidAsk)",
+        "Price AT critical support $127.21 - breakout imminent",
+        "60/40 split favors SOL (bid) to capture downside if support breaks",
+        "Max 69 bins for widest range given volatility constraint"
+      ],
+      "binConfiguration": { "bidBins": 34, "askBins": 34, "totalBins": 69 },
+      "liquidityDistribution": { "tokenXPercentage": 60, "tokenYPercentage": 40, "isAsymmetric": true },
+      "strategyComparison": [
+        { 
+          "strategy": "BidAsk (60/40)", 
+          "recommended": true, 
+          "expectedAPR": 18.5, 
+          "feeEfficiency": 82,
+          "rebalanceDays": 5,
+          "riskScore": "MEDIUM",
+          "bestFor": "Bearish trending markets"
+        },
+        { 
+          "strategy": "Spot (50/50)", 
+          "recommended": false, 
+          "expectedAPR": 14.2,
+          "feeEfficiency": 68,
+          "rebalanceDays": 6,
+          "riskScore": "MEDIUM",
+          "issue": "Symmetric liquidity wastes 40% capital on ask side", 
+          "whyRejected": "Bearish trend means price moves down, not up - ask side earns nothing"
+        },
+        { 
+          "strategy": "Curve (Tight)", 
+          "recommended": false, 
+          "expectedAPR": 8.5,
+          "feeEfficiency": 45,
+          "rebalanceDays": 2,
+          "riskScore": "HIGH",
+          "issue": "12% volatility incompatible with tight ±1% range", 
+          "whyRejected": "Would go out-of-range 3x more often than BidAsk"
+        }
+      ],
+      "riskAssessment": {
+        "impermanentLoss": { "priceUp10Percent": { "il": 0.47, "severity": "LOW" }, "priceDown10Percent": { "il": 0.47, "severity": "LOW" } },
+        "rebalancing": { "expectedDaysUntilRebalance": 5, "probabilityWithin7Days": 65, "costPerRebalance": 0.03, "breakEvenHours": 8 },
+        "marketStructure": { "nearestSupport": { "price": 127.21, "distance": "0.01%", "breakProbability": 45 }, "nearestResistance": { "price": 135.00, "distance": "6.1%", "breakProbability": 15 } }
+      },
+      "mitigationStrategies": [
+        "Set price alert at $125.50 (2% below support)",
+        "Monitor position every 6 hours after day 4",
+        "If support breaks, immediate rebalance to $120-$128 range"
+      ]
+    }
+  </correct_output>
+</example>
+
+<example id="2">
+  <scenario>
+    Pool: USDC/USDT (stablecoin pair)
+    Current Price: $1.0002
+    30d Trend: Neutral (0.02% change)
+    Volatility: 0.5% (VERY LOW)
+    Volume: High (2.5x average)
+  </scenario>
+  
+  <thinking>
+    1. **Market Regime**: Neutral (0.02%) + Very low volatility (0.5%)
+       Combined: "Stablecoin Range-Bound"
+    
+    2. **Strategy Selection**: Curve
+       - Stablecoin → price stays ±0.5% → tight concentration ideal
+       - High volume (2.5x) → more fees from concentrated liquidity
+       - Why NOT Spot: Spreads liquidity over unnecessary range
+       - Why NOT BidAsk: No directional trend to exploit
+    
+    3. **Range Calculation**:
+       - Ideal range: 2x volatility = 1%
+       - Bins needed: ~20 bins (well under limit)
+       - Constrained to 69 bins: NO
+       - Final: 10 bid + 10 ask = 21 total
+    
+    4. **Risk Analysis**:
+       - Support: $0.9985 (0.17% below)
+       - Resistance: $1.0020 (0.18% above)
+       - Edge probability: <5% in 7 days
+       - Expected rebalance: 30+ days
+    
+    5. **Confidence Breakdown**:
+       - Market clarity: 100/100 (textbook stablecoin)
+       - Data quality: 95/100 (full history)
+       - Strategy fit: 100/100 (Curve perfect for stables)
+       - Risk acceptability: 95/100 (very low risk)
+       Calculation: (100+95+100+95)/4 = 97.5% → Round to 95%
+       FINAL: 95%
+    
+    6. **Sanity Check**:
+       - [✓] bidBins=10 ≤ 34
+       - [✓] askBins=10 ≤ 34
+       - [✓] totalBins=21 ≤ 69
+       - [✓] Support distance 0.17% < 100%
+       - [✓] APR 8.5% > 0
+  </thinking>
+  
+  <correct_output>
+    {
+      "strategy": "Curve",
+      "confidence": 95,
+      "reasoning": [
+        "Stablecoin pair with 0.5% volatility - ideal for Curve",
+        "High volume (2.5x) means concentrated liquidity earns more fees",
+        "Tight 20-bin range sufficient for ±0.5% price movement",
+        "Low rebalance risk - position should last 30+ days"
+      ],
+      "binConfiguration": { "bidBins": 10, "askBins": 10, "totalBins": 21 },
+      "liquidityDistribution": { "tokenXPercentage": 50, "tokenYPercentage": 50, "isAsymmetric": false },
+      "strategyComparison": [
+        { 
+          "strategy": "Curve (Tight)", 
+          "recommended": true, 
+          "expectedAPR": 8.5, 
+          "feeEfficiency": 95,
+          "rebalanceDays": 30,
+          "riskScore": "LOW",
+          "bestFor": "Stablecoin pairs with low volatility"
+        },
+        { 
+          "strategy": "Spot (50/50)", 
+          "recommended": false, 
+          "expectedAPR": 4.2,
+          "feeEfficiency": 55,
+          "rebalanceDays": 60,
+          "riskScore": "LOW",
+          "issue": "Spreads liquidity over unnecessary wide range", 
+          "whyRejected": "Stablecoins don't need wide ranges - wastes 50% fee efficiency"
+        },
+        { 
+          "strategy": "BidAsk", 
+          "recommended": false, 
+          "expectedAPR": 3.8,
+          "feeEfficiency": 45,
+          "rebalanceDays": 45,
+          "riskScore": "LOW",
+          "issue": "No directional trend to exploit", 
+          "whyRejected": "Stablecoin pair has no trend - asymmetric distribution provides no benefit"
+        }
+      ],
+      "expectedPerformance": { "estimatedAPR": 8.5, "feeEfficiency": 95, "rebalanceFrequency": "low" }
+    }
+  </correct_output>
+</example>
+
+## BIN RANGE GUIDELINES (Within 69-bin limit!)
 
 ### For SOL/USDC and similar volatile pairs:
 | Recommendation | Bins Per Side | Total Bins | Approx. Range |
@@ -1578,67 +2435,55 @@ The number of bins determines how wide your price range is.
 ### For Meme/High-volatility tokens:
 - Use the MAXIMUM 34 bins per side (69 total)
 - Even this may require frequent rebalancing
-- Acknowledge the limitation in your response
-
-## IMPORTANT CONSIDERATIONS
-
-1. **69-bin limit means narrower ranges than ideal for volatile assets**
-   - SOL/USDC with 69 bins covers ~±5% instead of ideal ±10%
-   - Users should expect more frequent rebalancing
-   - This is a technical constraint, not a recommendation choice
-
-2. **Volume vs Range tradeoff**
-   - Tighter range = more fee capture when in range
-   - Wider range = less rebalancing but lower fee concentration
-   - With 69-bin limit, lean toward maximum bins for volatile pairs
 
 ## OUTPUT FORMAT (JSON):
+
+After your <thinking> section, output valid JSON with these fields.
+**IMPORTANT: ALL fields below are REQUIRED. You MUST include strategyComparison with ALL metrics, riskAssessment, and mitigationStrategies in EVERY response.**
+
 {
   "strategy": "Spot|Curve|BidAsk",
   "confidence": 85,
-  "reasoning": ["Using max 69 bins for widest range...", "Volatile pair needs maximum coverage..."],
+  "reasoning": ["reason1", "reason2", "reason3"],
   "binConfiguration": {
-    "minBinId": 350,
-    "maxBinId": 419,
-    "bidBins": 34,
-    "askBins": 34,
-    "totalBins": 69
+    "minBinId": number,
+    "maxBinId": number,
+    "bidBins": number (max 34),
+    "askBins": number (max 34),
+    "totalBins": number (max 69)
   },
   "liquidityDistribution": {
-    "tokenXPercentage": 50,
-    "tokenYPercentage": 50,
-    "isAsymmetric": false
+    "tokenXPercentage": number,
+    "tokenYPercentage": number,
+    "isAsymmetric": boolean
   },
   "expectedPerformance": {
-    "estimatedAPR": 22.5,
-    "feeEfficiency": 85,
-    "rebalanceFrequency": "medium"
+    "estimatedAPR": number,
+    "feeEfficiency": number,
+    "rebalanceFrequency": "high|medium|low"
   },
-  "risks": ["Limited to 69 bins due to Meteora constraint...", "May need rebalancing if price moves >5%..."],
-  "marketRegime": "Bullish Trending"
-}
-
-## EXAMPLE FOR SOL/USDC:
-
-**CORRECT (respects 69-bin limit):**
-{
-  "binConfiguration": {
-    "bidBins": 34,
-    "askBins": 34,
-    "totalBins": 69
+  "risks": ["risk1", "risk2"],
+  "marketRegime": "description",
+  "strategyComparison": [
+    { 
+      "strategy": "name", 
+      "recommended": true/false, 
+      "expectedAPR": number,
+      "feeEfficiency": number,
+      "rebalanceDays": number,
+      "riskScore": "LOW|MEDIUM|HIGH",
+      "bestFor": "market condition (for recommended only)",
+      "issue": "problem (for rejected only)", 
+      "whyRejected": "reason (for rejected only)" 
+    }
+  ],
+  "riskAssessment": {
+    "impermanentLoss": { "priceUp10Percent": { "il": number, "severity": "LOW|MEDIUM|HIGH" } },
+    "rebalancing": { "expectedDaysUntilRebalance": number, "probabilityWithin7Days": number },
+    "marketStructure": { "nearestSupport": { "price": number, "distance": "X%", "breakProbability": number } }
   },
-  "reasoning": ["Using maximum 69 bins allowed by Meteora", "Provides ~±5% range around current price", "Wider range not possible in single transaction"]
-}
-
-**WRONG (exceeds limit - will fail!):**
-{
-  "binConfiguration": {
-    "bidBins": 69,
-    "askBins": 69,
-    "totalBins": 138
-  }
-}
-❌ This will fail with InvalidRealloc error!`;
+  "mitigationStrategies": ["strategy1", "strategy2"]
+}`;
     }
 
     /**
@@ -1675,35 +2520,173 @@ PAIR CHARACTERISTICS:
 - Has Stable: ${ctx.pairCharacteristics.hasStable ? 'YES' : 'NO'}
 - Volatility Score: ${ctx.pairCharacteristics.volatilityScore.toFixed(2)}%
 
-    Recommend the optimal strategy, bin configuration, and explain your reasoning.`;
+Recommend the optimal strategy, bin configuration, and explain your reasoning.
+
+REMINDER: Your JSON response MUST include:
+- strategyComparison (array of 3 strategies: Spot, Curve, BidAsk with recommended/rejected status)
+- riskAssessment (impermanentLoss, rebalancing, marketStructure sections)
+- mitigationStrategies (array of 2-3 actionable strategies)`;
     }
 
     /**
-     * Parse LLM response for creation recommendation
+     * Parse and validate LLM response for creation recommendation using Zod schema
+     * Implements Week 1 Quick Win: JSON schema validation for pool creation
      */
     private parseCreationRecommendation(text: string, context: PoolCreationContext): PoolCreationRecommendation {
         try {
             // Debug: Log raw response length
-            console.log(chalk.gray(`  🔍 Raw LLM Response Length: ${text.length} `));
+            console.log(chalk.gray(`  🔍 Raw LLM Response Length: ${text.length}`));
 
             // Extract JSON from response (handle markdown blocks)
-            const jsonMatch = text.match(/```json\n([\s\S] +?) \n```/) || text.match(/\{[\s\S]+\}/);
+            const jsonMatch = text.match(/```json\n([\s\S]+?)\n```/) || text.match(/\{[\s\S]+\}/);
 
             if (jsonMatch) {
                 const jsonText = jsonMatch[1] || jsonMatch[0];
                 const parsed = JSON.parse(jsonText);
-                return parsed as PoolCreationRecommendation;
+
+                // Validate with Zod schema
+                const validationResult = PoolCreationRecommendationSchema.safeParse(parsed);
+
+                if (validationResult.success) {
+                    console.log(chalk.gray('[LLM] ✓ Creation recommendation validated successfully'));
+
+                    // Debug: Log presence of enhanced fields
+                    const data = validationResult.data;
+                    console.log(chalk.cyan('[LLM] Enhanced fields check:'));
+                    console.log(chalk.cyan(`  • strategyComparison: ${data.strategyComparison ? `✓ (${data.strategyComparison.length} strategies)` : '✗ not present'}`));
+                    console.log(chalk.cyan(`  • riskAssessment: ${data.riskAssessment ? '✓ present' : '✗ not present'}`));
+                    console.log(chalk.cyan(`  • mitigationStrategies: ${data.mitigationStrategies ? `✓ (${data.mitigationStrategies.length} items)` : '✗ not present'}`));
+
+                    return data;
+                } else {
+                    // Log validation errors but try to fix common issues
+                    console.log(chalk.yellow('[LLM] ⚠️ Validation issues detected, attempting to fix...'));
+
+                    const fixedRecommendation = this.fixCreationValidationErrors(parsed, context);
+
+                    // Re-validate after fixes
+                    const revalidation = PoolCreationRecommendationSchema.safeParse(fixedRecommendation);
+                    if (revalidation.success) {
+                        console.log(chalk.gray('[LLM] ✓ Recommendation fixed and validated'));
+                        return revalidation.data;
+                    }
+
+                    // If still failing, log details
+                    console.log(chalk.yellow('[LLM] ⚠️ Some validation errors remain:'));
+                    validationResult.error.issues.forEach(issue => {
+                        console.log(chalk.gray(`    - ${issue.path.join('.')}: ${issue.message}`));
+                    });
+
+                    // Return the fixed version with type assertion
+                    return fixedRecommendation as PoolCreationRecommendation;
+                }
             } else {
                 console.log(chalk.yellow(`  ⚠️  Could not extract JSON from LLM response`));
                 console.log(chalk.gray(`  Response snippet: ${text.slice(0, 100)}...`));
             }
         } catch (error: any) {
-            console.log(chalk.yellow(`  ⚠️  Failed to parse LLM JSON: ${error.message} `));
+            console.log(chalk.yellow(`  ⚠️  Failed to parse LLM JSON: ${error.message}`));
         }
 
         // Return default recommendation
         console.log(chalk.yellow('  ⚠️  Falling back to algorithmic recommendation'));
         return this.getMockCreationRecommendation(context);
+    }
+
+    /**
+     * Fix common validation errors in creation recommendations
+     * Implements output validation from Week 1 Quick Wins
+     */
+    private fixCreationValidationErrors(recommendation: any, context: PoolCreationContext): any {
+        const fixed = { ...recommendation };
+
+        // Fix confidence: clamp to 0-100
+        if (typeof fixed.confidence === 'number') {
+            if (fixed.confidence < 0 || fixed.confidence > 100) {
+                console.log(chalk.gray(`    Fixing confidence: ${fixed.confidence} → ${Math.max(0, Math.min(100, fixed.confidence))}`));
+                fixed.confidence = Math.max(0, Math.min(100, fixed.confidence));
+            }
+        }
+
+        // Fix binConfiguration
+        if (fixed.binConfiguration) {
+            // Cap bidBins at 34
+            if (fixed.binConfiguration.bidBins > 34) {
+                console.log(chalk.gray(`    Fixing bidBins: ${fixed.binConfiguration.bidBins} → 34`));
+                fixed.binConfiguration.bidBins = 34;
+            }
+
+            // Cap askBins at 34
+            if (fixed.binConfiguration.askBins > 34) {
+                console.log(chalk.gray(`    Fixing askBins: ${fixed.binConfiguration.askBins} → 34`));
+                fixed.binConfiguration.askBins = 34;
+            }
+
+            // Recalculate totalBins (bid + ask + 1 for active bin)
+            // If LLM outputs 68 (34+34), correct it to 69
+            const calculatedTotal = fixed.binConfiguration.bidBins + fixed.binConfiguration.askBins;
+            if (calculatedTotal === 68) {
+                // LLM forgot the active bin - correct to 69
+                fixed.binConfiguration.totalBins = 69;
+            } else {
+                fixed.binConfiguration.totalBins = Math.min(calculatedTotal + 1, 69);
+            }
+
+            // Ensure totalBins doesn't exceed 69
+            if (fixed.binConfiguration.totalBins > 69) {
+                fixed.binConfiguration.totalBins = 69;
+            }
+
+            // Fix minBinId and maxBinId if needed
+            if (!fixed.binConfiguration.minBinId || !fixed.binConfiguration.maxBinId) {
+                const activeBinId = context.pool.activeBinId;
+                fixed.binConfiguration.minBinId = activeBinId - fixed.binConfiguration.bidBins;
+                fixed.binConfiguration.maxBinId = activeBinId + fixed.binConfiguration.askBins;
+            }
+        }
+
+        // Ensure reasoning is an array
+        if (!Array.isArray(fixed.reasoning)) {
+            if (typeof fixed.reasoning === 'string') {
+                fixed.reasoning = [fixed.reasoning];
+            } else {
+                fixed.reasoning = ['AI-generated recommendation'];
+            }
+        }
+
+        // Ensure risks is an array
+        if (!Array.isArray(fixed.risks)) {
+            if (typeof fixed.risks === 'string') {
+                fixed.risks = [fixed.risks];
+            } else {
+                fixed.risks = ['Price volatility may cause rebalancing needs'];
+            }
+        }
+
+        // Ensure expectedPerformance exists
+        if (!fixed.expectedPerformance) {
+            fixed.expectedPerformance = {
+                estimatedAPR: context.pool.apr || 0,
+                feeEfficiency: 75,
+                rebalanceFrequency: 'medium'
+            };
+        }
+
+        // Ensure liquidityDistribution exists
+        if (!fixed.liquidityDistribution) {
+            fixed.liquidityDistribution = {
+                tokenXPercentage: 50,
+                tokenYPercentage: 50,
+                isAsymmetric: false
+            };
+        }
+
+        // Ensure marketRegime exists
+        if (!fixed.marketRegime) {
+            fixed.marketRegime = context.market.priceHistory30d.trend || 'Unknown';
+        }
+
+        return fixed;
     }
 
     /**

@@ -36,13 +36,13 @@ const NATIVE_SOL_MINT = 'So11111111111111111111111111111111111111112';
 async function getTokenBalance(keypair: Keypair, tokenMint: string, decimals: number): Promise<number> {
     try {
         const connection = connectionService.getConnection();
-        
+
         // Check if this is native SOL
         if (tokenMint === NATIVE_SOL_MINT) {
             const balance = await connection.getBalance(keypair.publicKey);
             return balance / Math.pow(10, 9); // SOL always has 9 decimals
         }
-        
+
         // SPL Token
         const mintPubkey = new PublicKey(tokenMint);
         const ata = await getAssociatedTokenAddress(mintPubkey, keypair.publicKey);
@@ -58,7 +58,7 @@ async function getTokenBalance(keypair: Keypair, tokenMint: string, decimals: nu
  * Get balances for both tokens in a pool
  */
 async function getPoolTokenBalances(
-    keypair: Keypair, 
+    keypair: Keypair,
     pool: PoolInfo
 ): Promise<{ tokenXBalance: number; tokenYBalance: number }> {
     const [tokenXBalance, tokenYBalance] = await Promise.all([
@@ -140,7 +140,7 @@ export async function handlePoolsMenu(ctx: BotContext) {
 export async function handlePoolSearchAddress(ctx: BotContext) {
     // Set conversation state to expect pool address
     ctx.session.currentFlow = 'pool_search_address';
-    
+
     await ctx.editMessageText(
         `🔍 **Search Pool by Address**\n\n` +
         `Please send the pool address you want to look up.\n\n` +
@@ -159,17 +159,17 @@ export async function handlePoolSearchAddress(ctx: BotContext) {
 export async function handlePoolAddressInput(ctx: BotContext, address: string) {
     // Clear flow state
     ctx.session.currentFlow = 'idle';
-    
+
     const loadingMsg = await ctx.reply('🔄 Searching for pool...');
-    
+
     try {
         const pool = await poolService.searchPoolByAddress(address.trim());
-        
-        await ctx.telegram.deleteMessage(ctx.chat!.id, loadingMsg.message_id).catch(() => {});
-        
+
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loadingMsg.message_id).catch(() => { });
+
         // Store pool in session for actions
         ctx.session.selectedPool = pool.address;
-        
+
         await ctx.reply(
             formatPoolDetail(pool),
             {
@@ -184,12 +184,12 @@ export async function handlePoolAddressInput(ctx: BotContext, address: string) {
                 }
             }
         );
-        
+
         console.log(chalk.green(`✓ Pool found: ${pool.tokenX.symbol}/${pool.tokenY.symbol}`));
-        
+
     } catch (error: any) {
-        await ctx.telegram.deleteMessage(ctx.chat!.id, loadingMsg.message_id).catch(() => {});
-        
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loadingMsg.message_id).catch(() => { });
+
         await ctx.reply(
             `❌ **Pool not found**\n\n` +
             `Could not find pool with address:\n\`${address}\`\n\n` +
@@ -213,7 +213,7 @@ export async function handlePoolAddressInput(ctx: BotContext, address: string) {
 export async function handlePoolSearchPair(ctx: BotContext) {
     // Set conversation state
     ctx.session.currentFlow = 'pool_search_pair';
-    
+
     await ctx.editMessageText(
         `🔎 **Search by Token Pair**\n\n` +
         `Send the token pair you want to search for.\n\n` +
@@ -236,7 +236,7 @@ export async function handlePoolSearchPair(ctx: BotContext) {
 export async function handlePoolPairInput(ctx: BotContext, input: string) {
     // Clear flow state
     ctx.session.currentFlow = 'idle';
-    
+
     // Parse input - handle both "SOL USDC" and "SOL-USDC"
     const parts = input.trim().toUpperCase().split(/[\s\-]+/);
     if (parts.length < 2) {
@@ -254,15 +254,15 @@ export async function handlePoolPairInput(ctx: BotContext, input: string) {
         );
         return;
     }
-    
+
     const [token1, token2] = parts;
     const loadingMsg = await ctx.reply(`🔄 Searching for ${token1}/${token2} pools...`);
-    
+
     try {
         const pools = await poolService.getPoolsByTokenPair(token1, token2);
-        
-        await ctx.telegram.deleteMessage(ctx.chat!.id, loadingMsg.message_id).catch(() => {});
-        
+
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loadingMsg.message_id).catch(() => { });
+
         if (pools.length === 0) {
             await ctx.reply(
                 `❌ **No pools found**\n\n` +
@@ -280,10 +280,10 @@ export async function handlePoolPairInput(ctx: BotContext, input: string) {
             );
             return;
         }
-        
+
         // Sort by TVL
         pools.sort((a, b) => (b.tvl || 0) - (a.tvl || 0));
-        
+
         // Store in session for pagination
         ctx.session.pagination = {
             data: pools,
@@ -293,12 +293,12 @@ export async function handlePoolPairInput(ctx: BotContext, input: string) {
             listType: 'pools',
             type: 'pool_search'
         };
-        
+
         await sendPoolList(ctx, pools, 0, `${token1}/${token2}`);
-        
+
     } catch (error: any) {
-        await ctx.telegram.deleteMessage(ctx.chat!.id, loadingMsg.message_id).catch(() => {});
-        
+        await ctx.telegram.deleteMessage(ctx.chat!.id, loadingMsg.message_id).catch(() => { });
+
         await ctx.reply(
             `❌ **Search failed**\n\n` +
             `Error: ${error.message || 'Unknown error'}`,
@@ -319,15 +319,15 @@ export async function handlePoolPairInput(ctx: BotContext, input: string) {
 
 export async function handleTopPoolsByTVL(ctx: BotContext) {
     await ctx.answerCbQuery('Loading...');
-    
+
     const loadingMsg = await ctx.editMessageText(
         '🔄 Fetching top pools by TVL...',
         { parse_mode: 'Markdown' }
     );
-    
+
     try {
         const pools = await poolService.getTopPoolsByTVL(15);
-        
+
         ctx.session.pagination = {
             data: pools,
             currentPage: 0,
@@ -336,9 +336,9 @@ export async function handleTopPoolsByTVL(ctx: BotContext) {
             listType: 'pools',
             type: 'pool_tvl'
         };
-        
+
         await sendPoolList(ctx, pools, 0, 'Top by TVL', true);
-        
+
     } catch (error: any) {
         await ctx.editMessageText(
             `❌ **Failed to fetch pools**\n\n` +
@@ -358,15 +358,15 @@ export async function handleTopPoolsByTVL(ctx: BotContext) {
 
 export async function handleTopPoolsByAPR(ctx: BotContext) {
     await ctx.answerCbQuery('Loading...');
-    
+
     await ctx.editMessageText(
         '🔄 Fetching top pools by APR...',
         { parse_mode: 'Markdown' }
     );
-    
+
     try {
         const pools = await poolService.getTopPoolsByAPR(15);
-        
+
         ctx.session.pagination = {
             data: pools,
             currentPage: 0,
@@ -375,9 +375,9 @@ export async function handleTopPoolsByAPR(ctx: BotContext) {
             listType: 'pools',
             type: 'pool_apr'
         };
-        
+
         await sendPoolList(ctx, pools, 0, 'Top by APR', true);
-        
+
     } catch (error: any) {
         await ctx.editMessageText(
             `❌ **Failed to fetch pools**\n\n` +
@@ -398,9 +398,9 @@ export async function handleTopPoolsByAPR(ctx: BotContext) {
 // ==================== POOL LIST PAGINATION ====================
 
 async function sendPoolList(
-    ctx: BotContext, 
-    pools: PoolInfo[], 
-    page: number, 
+    ctx: BotContext,
+    pools: PoolInfo[],
+    page: number,
     title: string,
     isEdit: boolean = false
 ) {
@@ -408,14 +408,14 @@ async function sendPoolList(
     const endIdx = Math.min(startIdx + POOLS_PER_PAGE, pools.length);
     const pagePools = pools.slice(startIdx, endIdx);
     const totalPages = Math.ceil(pools.length / POOLS_PER_PAGE);
-    
+
     let message = `🏊 **${title}**\n`;
     message += `📄 Page ${page + 1}/${totalPages} (${pools.length} pools)\n\n`;
-    
+
     pagePools.forEach((pool, idx) => {
         message += formatPoolCard(pool, startIdx + idx) + '\n\n';
     });
-    
+
     // Build navigation buttons
     const navButtons: any[] = [];
     if (page > 0) {
@@ -424,30 +424,30 @@ async function sendPoolList(
     if (endIdx < pools.length) {
         navButtons.push({ text: 'Next ➡️', callback_data: `pools_page_${page + 1}` });
     }
-    
+
     // Pool selection buttons
     const poolButtons = pagePools.map((pool, idx) => ({
         text: `${startIdx + idx + 1}. ${pool.tokenX.symbol}/${pool.tokenY.symbol}`,
         callback_data: `pool_select_${shortenAddress(pool.address, 8)}`
     }));
-    
+
     // Arrange pool buttons in rows of 2
     const poolButtonRows: any[][] = [];
     for (let i = 0; i < poolButtons.length; i += 2) {
         poolButtonRows.push(poolButtons.slice(i, i + 2));
     }
-    
+
     const keyboard = [
         ...poolButtonRows,
         navButtons.length > 0 ? navButtons : [],
         [{ text: '⬅️ Back to Pools', callback_data: 'pools_menu' }]
     ].filter(row => row.length > 0);
-    
+
     const options = {
         parse_mode: 'Markdown' as const,
         reply_markup: { inline_keyboard: keyboard }
     };
-    
+
     if (isEdit) {
         await ctx.editMessageText(message, options);
     } else {
@@ -457,17 +457,17 @@ async function sendPoolList(
 
 export async function handlePoolPage(ctx: BotContext, page: number) {
     await ctx.answerCbQuery();
-    
+
     const pagination = ctx.session.pagination;
     if (!pagination?.data) {
         await ctx.editMessageText('Session expired. Please search again.');
         return;
     }
-    
+
     const pools = pagination.data as PoolInfo[];
     const title = pagination.type === 'pool_tvl' ? 'Top by TVL' :
-                  pagination.type === 'pool_apr' ? 'Top by APR' : 'Search Results';
-    
+        pagination.type === 'pool_apr' ? 'Top by APR' : 'Search Results';
+
     await sendPoolList(ctx, pools, page, title, true);
 }
 
@@ -475,34 +475,34 @@ export async function handlePoolPage(ctx: BotContext, page: number) {
 
 export async function handlePoolDetail(ctx: BotContext, shortAddr: string) {
     await ctx.answerCbQuery('Loading...');
-    
+
     // Find pool from pagination data or session
     let pool: PoolInfo | undefined;
-    
+
     if (ctx.session.pagination?.data) {
         const pools = ctx.session.pagination.data as PoolInfo[];
         pool = pools.find(p => p.address.startsWith(shortAddr) || p.address.includes(shortAddr));
     }
-    
+
     if (!pool && ctx.session.selectedPool) {
         try {
             pool = await poolService.searchPoolByAddress(ctx.session.selectedPool);
-        } catch (e) {}
+        } catch (e) { }
     }
-    
+
     if (!pool) {
         // Try to fetch by partial address
         try {
             const allPools = await poolService.fetchAllPools();
-            const found = allPools.find((p: any) => 
+            const found = allPools.find((p: any) =>
                 p.address.startsWith(shortAddr) || p.address.includes(shortAddr)
             );
             if (found) {
                 pool = await poolService.searchPoolByAddress(found.address);
             }
-        } catch (e) {}
+        } catch (e) { }
     }
-    
+
     if (!pool) {
         await ctx.editMessageText(
             '❌ Pool not found. Please search again.',
@@ -518,9 +518,9 @@ export async function handlePoolDetail(ctx: BotContext, shortAddr: string) {
         );
         return;
     }
-    
+
     ctx.session.selectedPool = pool.address;
-    
+
     await ctx.editMessageText(
         formatPoolDetail(pool),
         {
@@ -546,10 +546,10 @@ export async function handlePoolSelect(ctx: BotContext, shortAddr: string) {
 export async function handleAddToFavorites(ctx: BotContext, shortAddr: string) {
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
-    
+
     // TODO: Implement favorites storage in userDataService
     await ctx.answerCbQuery('⭐ Added to favorites!');
-    
+
     // For now, just acknowledge
     console.log(chalk.green(`✓ User ${telegramId} added pool ${shortAddr} to favorites`));
 }
@@ -559,7 +559,7 @@ export async function handleAddToFavorites(ctx: BotContext, shortAddr: string) {
 export async function handleCreatePositionFromPool(ctx: BotContext, shortAddr: string) {
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
-    
+
     // Check wallet
     const keypair = multiWalletStorage.getActiveKeypair(telegramId);
     if (!keypair) {
@@ -579,17 +579,17 @@ export async function handleCreatePositionFromPool(ctx: BotContext, shortAddr: s
         );
         return;
     }
-    
+
     await ctx.answerCbQuery('Loading pool details...');
-    
+
     // Find pool
     let pool: PoolInfo | undefined;
     if (ctx.session.selectedPool) {
         try {
             pool = await poolService.searchPoolByAddress(ctx.session.selectedPool);
-        } catch (e) {}
+        } catch (e) { }
     }
-    
+
     if (!pool) {
         await ctx.editMessageText(
             '❌ Pool not found. Please select a pool again.',
@@ -605,14 +605,14 @@ export async function handleCreatePositionFromPool(ctx: BotContext, shortAddr: s
         );
         return;
     }
-    
+
     // Store pool in flow data
     ctx.session.flowData = {
         poolAddress: pool.address,
         poolInfo: pool,
         step: 'pool_info'
     };
-    
+
     // STEP 1: Show Pool Active Bin & Price Information (like CLI)
     await showPoolInfoStep(ctx, pool);
 }
@@ -625,7 +625,7 @@ async function showPoolInfoStep(ctx: BotContext, pool: PoolInfo) {
     try {
         const activeBinDetails = await poolService.getActiveBinDetails(pool.address);
         activeBinInfo = `• Bin Liquidity: ${activeBinDetails.xAmount.toFixed(4)} ${pool.tokenX.symbol}\n` +
-                        `                 ${activeBinDetails.yAmount.toFixed(4)} ${pool.tokenY.symbol}\n`;
+            `                 ${activeBinDetails.yAmount.toFixed(4)} ${pool.tokenY.symbol}\n`;
     } catch (e) {
         // Skip if unavailable
     }
@@ -668,15 +668,15 @@ Press **Continue** to get AI strategy analysis.
 
 export async function handleNewPositionAIAnalysis(ctx: BotContext) {
     await ctx.answerCbQuery('Analyzing with AI...');
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
-    
+
     // Show loading message
     await ctx.editMessageText(
         `🤖 **AI STRATEGY ANALYSIS**\n\n` +
@@ -684,29 +684,29 @@ export async function handleNewPositionAIAnalysis(ctx: BotContext) {
         `⏳ _This may take 30-60 seconds..._`,
         { parse_mode: 'Markdown' }
     );
-    
+
     try {
         // Import LLM agent
         const { llmAgent } = await import('../../services/llmAgent.service');
-        
+
         if (!llmAgent.isAvailable()) {
             // LLM not configured, use algorithmic recommendation
             await showAlgorithmicRecommendation(ctx, pool);
             return;
         }
-        
+
         // Get AI recommendation
         const aiRecommendation = await llmAgent.analyzePoolForCreation(pool);
-        
+
         // Store AI recommendation in flow data
         flowData.aiRecommendation = aiRecommendation;
-        
+
         // Show AI recommendation
         await showAIRecommendation(ctx, pool, aiRecommendation);
-        
+
     } catch (error: any) {
         console.error('AI analysis error:', error);
-        
+
         // Fallback to algorithmic
         await ctx.editMessageText(
             `⚠️ **AI Analysis Failed**\n\n` +
@@ -714,7 +714,7 @@ export async function handleNewPositionAIAnalysis(ctx: BotContext) {
             `Falling back to algorithmic guidance...`,
             { parse_mode: 'Markdown' }
         );
-        
+
         await new Promise(r => setTimeout(r, 2000));
         await showAlgorithmicRecommendation(ctx, pool);
     }
@@ -722,21 +722,107 @@ export async function handleNewPositionAIAnalysis(ctx: BotContext) {
 
 async function showAIRecommendation(ctx: BotContext, pool: PoolInfo, recommendation: any) {
     const flowData = ctx.session.flowData!;
-    
+
     const confidenceLevel = recommendation.confidence >= 85 ? '🟢 HIGH' :
-                           recommendation.confidence >= 70 ? '🟡 MEDIUM' : '🔴 LOW';
-    
+        recommendation.confidence >= 70 ? '🟡 MEDIUM' : '🔴 LOW';
+
     // Calculate bin range based on AI recommendation
     const bidBins = recommendation.binConfiguration?.bidBins || 15;
     const askBins = recommendation.binConfiguration?.askBins || 15;
     const minBinId = pool.activeBin - bidBins;
     const maxBinId = pool.activeBin + askBins;
-    
+
     // Calculate price range
     const minPrice = poolService.calculateBinPrice(minBinId, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
     const maxPrice = poolService.calculateBinPrice(maxBinId, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
     const currentPrice = pool.price || poolService.calculateBinPrice(pool.activeBin, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
-    
+
+    // Build strategy comparison section with enhanced metrics
+    let strategyComparisonText = '';
+    if (recommendation.strategyComparison?.length > 0) {
+        strategyComparisonText = '\n📊 **STRATEGY COMPARISON:**\n';
+        
+        // Find the recommended strategy for APR comparison
+        const recommendedStrategy = recommendation.strategyComparison.find((s: any) => s.recommended);
+        const recommendedAPR = recommendedStrategy?.expectedAPR || 0;
+        
+        recommendation.strategyComparison.forEach((s: any, i: number) => {
+            if (s.recommended) {
+                strategyComparisonText += `\n${i + 1}. **${s.strategy}** ✅ RECOMMENDED\n`;
+                if (s.expectedAPR) strategyComparisonText += `   • Est. APR: ~${s.expectedAPR}%\n`;
+                if (s.feeEfficiency) strategyComparisonText += `   • Fee Efficiency: ${s.feeEfficiency}%\n`;
+                if (s.rebalanceDays) strategyComparisonText += `   • Rebalance: ~${s.rebalanceDays} days\n`;
+                if (s.riskScore) strategyComparisonText += `   • Risk: ${s.riskScore}\n`;
+                if (s.bestFor) strategyComparisonText += `   • Best for: ${s.bestFor}\n`;
+            } else {
+                strategyComparisonText += `\n${i + 1}. **${s.strategy}** ❌\n`;
+                if (s.expectedAPR) {
+                    const aprDiff = recommendedAPR > 0 
+                        ? Math.round(((s.expectedAPR - recommendedAPR) / recommendedAPR) * 100)
+                        : 0;
+                    strategyComparisonText += `   • Est. APR: ~${s.expectedAPR}% (${aprDiff}% vs recommended)\n`;
+                }
+                if (s.feeEfficiency) strategyComparisonText += `   • Fee Efficiency: ${s.feeEfficiency}%\n`;
+                if (s.rebalanceDays) strategyComparisonText += `   • Rebalance: ~${s.rebalanceDays} days\n`;
+                if (s.riskScore) strategyComparisonText += `   • Risk: ${s.riskScore}\n`;
+                if (s.issue) strategyComparisonText += `   • Issue: ${s.issue}\n`;
+                if (s.whyRejected) strategyComparisonText += `   • Why rejected: ${s.whyRejected}\n`;
+            }
+        });
+        
+        // Add verdict if we have APR data
+        if (recommendedAPR > 0) {
+            const alternatives = recommendation.strategyComparison.filter((s: any) => !s.recommended && s.expectedAPR);
+            if (alternatives.length > 0) {
+                const minAltAPR = Math.min(...alternatives.map((s: any) => s.expectedAPR));
+                const maxAltAPR = Math.max(...alternatives.map((s: any) => s.expectedAPR));
+                const minDiff = Math.round(((recommendedAPR - maxAltAPR) / maxAltAPR) * 100);
+                const maxDiff = Math.round(((recommendedAPR - minAltAPR) / minAltAPR) * 100);
+                if (minDiff > 0 || maxDiff > 0) {
+                    strategyComparisonText += `\n💡 **VERDICT**: ${recommendedStrategy?.strategy} earns ${minDiff}-${maxDiff}% more APR\n`;
+                }
+            }
+        }
+    }
+
+    // Build risk assessment section
+    let riskAssessmentText = '';
+    if (recommendation.riskAssessment) {
+        const ra = recommendation.riskAssessment;
+        riskAssessmentText = '\n📉 **RISK ASSESSMENT:**\n';
+        
+        if (ra.impermanentLoss?.priceUp10Percent) {
+            riskAssessmentText += `• IL if +10%: ${ra.impermanentLoss.priceUp10Percent.il}% (${ra.impermanentLoss.priceUp10Percent.severity})\n`;
+        }
+        if (ra.impermanentLoss?.priceDown10Percent) {
+            riskAssessmentText += `• IL if -10%: ${ra.impermanentLoss.priceDown10Percent.il}% (${ra.impermanentLoss.priceDown10Percent.severity})\n`;
+        }
+        if (ra.rebalancing) {
+            riskAssessmentText += `• Rebalance in: ~${ra.rebalancing.expectedDaysUntilRebalance} days\n`;
+            riskAssessmentText += `• 7-day rebalance prob: ${ra.rebalancing.probabilityWithin7Days}%\n`;
+        }
+        if (ra.marketStructure?.nearestSupport) {
+            // Format price with appropriate decimals (more for low-price tokens)
+            const supportPrice = ra.marketStructure.nearestSupport.price;
+            const formattedSupport = supportPrice < 0.01 
+                ? supportPrice.toFixed(6) 
+                : supportPrice < 1 
+                    ? supportPrice.toFixed(4) 
+                    : supportPrice.toFixed(2);
+            riskAssessmentText += `• Support: $${formattedSupport} (${ra.marketStructure.nearestSupport.distance}, ${ra.marketStructure.nearestSupport.breakProbability}% break)\n`;
+        }
+        if (ra.marketStructure?.nearestResistance) {
+            // Format price with appropriate decimals
+            const resistancePrice = ra.marketStructure.nearestResistance.price;
+            const formattedResistance = resistancePrice < 0.01 
+                ? resistancePrice.toFixed(6) 
+                : resistancePrice < 1 
+                    ? resistancePrice.toFixed(4) 
+                    : resistancePrice.toFixed(2);
+            riskAssessmentText += `• Resistance: $${formattedResistance} (${ra.marketStructure.nearestResistance.distance}, ${ra.marketStructure.nearestResistance.breakProbability}% break)\n`;
+        }
+    }
+
     const message = `
 🤖 **AI RECOMMENDATION**
 
@@ -748,7 +834,7 @@ async function showAIRecommendation(ctx: BotContext, pool: PoolInfo, recommendat
 
 **Why This Strategy?**
 ${recommendation.reasoning.slice(0, 3).map((r: string) => `✓ ${r}`).join('\n')}
-
+${strategyComparisonText}
 **Recommended Configuration:**
 • Bid Bins: ${bidBins}
 • Ask Bins: ${askBins}
@@ -764,8 +850,7 @@ ${recommendation.reasoning.slice(0, 3).map((r: string) => `✓ ${r}`).join('\n')
 • Est. APR: ~${recommendation.expectedPerformance?.estimatedAPR?.toFixed(1) || 'N/A'}%
 • Fee Efficiency: ${recommendation.expectedPerformance?.feeEfficiency || 'N/A'}%
 • Rebalance: ${recommendation.expectedPerformance?.rebalanceFrequency || 'N/A'}
-
-${recommendation.risks?.length > 0 ? '**Risks:**\n' + recommendation.risks.slice(0, 2).map((r: string) => `⚠️ ${r}`).join('\n') : ''}
+${riskAssessmentText}
 `.trim();
 
     await ctx.editMessageText(message, {
@@ -782,23 +867,23 @@ ${recommendation.risks?.length > 0 ? '**Risks:**\n' + recommendation.risks.slice
 
 async function showAlgorithmicRecommendation(ctx: BotContext, pool: PoolInfo) {
     const flowData = ctx.session.flowData!;
-    
+
     // Simple algorithmic recommendation
-    const isStablePair = ['USDC', 'USDT', 'DAI'].includes(pool.tokenX.symbol || '') && 
-                         ['USDC', 'USDT', 'DAI'].includes(pool.tokenY.symbol || '');
-    
+    const isStablePair = ['USDC', 'USDT', 'DAI'].includes(pool.tokenX.symbol || '') &&
+        ['USDC', 'USDT', 'DAI'].includes(pool.tokenY.symbol || '');
+
     const strategy = isStablePair ? 'Curve' : 'Spot';
     const binsPerSide = isStablePair ? 5 : 15;
-    
+
     // Calculate bin range
     const minBinId = pool.activeBin - binsPerSide;
     const maxBinId = pool.activeBin + binsPerSide;
-    
+
     // Calculate price range
     const minPrice = poolService.calculateBinPrice(minBinId, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
     const maxPrice = poolService.calculateBinPrice(maxBinId, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
     const currentPrice = pool.price || poolService.calculateBinPrice(pool.activeBin, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
-    
+
     // Create mock recommendation
     const algoRecommendation = {
         strategy,
@@ -825,9 +910,9 @@ async function showAlgorithmicRecommendation(ctx: BotContext, pool: PoolInfo) {
         },
         risks: []
     };
-    
+
     flowData.aiRecommendation = algoRecommendation;
-    
+
     const message = `
 📊 **ALGORITHMIC RECOMMENDATION**
 
@@ -867,16 +952,16 @@ ${algoRecommendation.reasoning.map((r: string) => `• ${r}`).join('\n')}
 // Handler for applying AI recommendation
 export async function handleApplyAIRecommendation(ctx: BotContext) {
     await ctx.answerCbQuery('Applying AI settings...');
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo || !flowData.aiRecommendation) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
     const recommendation = flowData.aiRecommendation;
-    
+
     // Apply AI recommended settings
     flowData.strategy = recommendation.strategy as 'Spot' | 'Curve' | 'BidAsk';
     flowData.binsPerSide = recommendation.binConfiguration?.bidBins || 15;
@@ -886,7 +971,7 @@ export async function handleApplyAIRecommendation(ctx: BotContext) {
     flowData.tokenXPercentage = recommendation.liquidityDistribution?.tokenXPercentage || 50;
     flowData.tokenYPercentage = recommendation.liquidityDistribution?.tokenYPercentage || 50;
     flowData.step = 'amounts';
-    
+
     // Skip to amounts entry
     await showAmountInput(ctx, pool);
 }
@@ -894,15 +979,15 @@ export async function handleApplyAIRecommendation(ctx: BotContext) {
 // Handler for manual/skip AI
 export async function handleSkipAI(ctx: BotContext) {
     await ctx.answerCbQuery();
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
-    
+
     // Show manual strategy selection
     await showStrategySelection(ctx, pool);
 }
@@ -947,18 +1032,18 @@ _Best for directional views_
 
 export async function handleStrategySelection(ctx: BotContext, strategy: 'Spot' | 'Curve' | 'BidAsk') {
     await ctx.answerCbQuery();
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolAddress) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     flowData.strategy = strategy;
     flowData.step = 'range';
-    
+
     const pool = flowData.poolInfo as PoolInfo;
-    
+
     // Show range selection
     await showRangeSelection(ctx, pool, strategy);
 }
@@ -967,18 +1052,18 @@ export async function handleStrategySelection(ctx: BotContext, strategy: 'Spot' 
 
 async function showRangeSelection(ctx: BotContext, pool: PoolInfo, strategy: string) {
     const activeBin = pool.activeBin;
-    
+
     // Default bins per side based on strategy
-    const defaultBins = strategy === 'Curve' ? 5 : 
-                        strategy === 'BidAsk' ? 25 : 15;
-    
+    const defaultBins = strategy === 'Curve' ? 5 :
+        strategy === 'BidAsk' ? 25 : 15;
+
     const minBin = activeBin - defaultBins;
     const maxBin = activeBin + defaultBins;
-    
+
     // Calculate price range
     const minPrice = poolService.calculateBinPrice(minBin, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
     const maxPrice = poolService.calculateBinPrice(maxBin, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
-    
+
     const message = `
 ➕ **CREATE POSITION**
 
@@ -1012,11 +1097,11 @@ Choose range width:
     const isMemeToken = memeTokens.includes(tokenXSymbol) || memeTokens.includes(tokenYSymbol);
     const hasStable = stableSymbols.includes(tokenXSymbol) || stableSymbols.includes(tokenYSymbol);
     const isStablePair = stableSymbols.includes(tokenXSymbol) && stableSymbols.includes(tokenYSymbol);
-    
+
     // Set recommended bins based on pair type
     const recommendedBins = isStablePair ? 69 : isMemeToken ? 100 : hasStable ? 69 : 50;
     const recommendedLabel = `✅ ${recommendedBins} bins (recommended)`;
-    
+
     await ctx.editMessageText(message, {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -1044,15 +1129,15 @@ Choose range width:
 
 export async function handleRangeSelection(ctx: BotContext, binsPerSide: number | 'custom') {
     await ctx.answerCbQuery();
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolAddress) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
-    
+
     if (binsPerSide === 'custom') {
         // Enter custom range input mode
         ctx.session.currentFlow = 'newpos_custom_range';
@@ -1073,24 +1158,24 @@ export async function handleRangeSelection(ctx: BotContext, binsPerSide: number 
         );
         return;
     }
-    
+
     // Calculate range
     const minBin = pool.activeBin - binsPerSide;
     const maxBin = pool.activeBin + binsPerSide;
-    
+
     flowData.binsPerSide = binsPerSide;
     flowData.activeBinId = pool.activeBin;
     flowData.minBinId = minBin;
     flowData.maxBinId = maxBin;
     flowData.step = 'amounts';
-    
+
     // Show amount input
     await showAmountInput(ctx, pool);
 }
 
 export async function handleCustomRangeInput(ctx: BotContext, input: string) {
     ctx.session.currentFlow = 'idle';
-    
+
     const parts = input.trim().split(/\s+/);
     if (parts.length !== 2) {
         await ctx.reply(
@@ -1106,10 +1191,10 @@ export async function handleCustomRangeInput(ctx: BotContext, input: string) {
         );
         return;
     }
-    
+
     const minBin = parseInt(parts[0]);
     const maxBin = parseInt(parts[1]);
-    
+
     if (isNaN(minBin) || isNaN(maxBin) || minBin >= maxBin) {
         await ctx.reply(
             '❌ Invalid bin IDs. Min must be less than Max.',
@@ -1124,29 +1209,29 @@ export async function handleCustomRangeInput(ctx: BotContext, input: string) {
         );
         return;
     }
-    
+
     const flowData = ctx.session.flowData!;
     const pool = flowData.poolInfo as PoolInfo;
-    
+
     flowData.activeBinId = pool.activeBin;
     flowData.minBinId = minBin;
     flowData.maxBinId = maxBin;
     flowData.binsPerSide = Math.floor((maxBin - minBin) / 2);
     flowData.step = 'amounts';
-    
+
     await showAmountInput(ctx, pool);
 }
 
 // Handler for retrying amount input
 export async function handleAmountsRetry(ctx: BotContext) {
     await ctx.answerCbQuery();
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     await showAmountInput(ctx, flowData.poolInfo as PoolInfo);
 }
 
@@ -1155,7 +1240,7 @@ export async function handleAmountsRetry(ctx: BotContext) {
 async function showAmountInput(ctx: BotContext, pool: PoolInfo) {
     const flowData = ctx.session.flowData!;
     const telegramId = ctx.from!.id;
-    
+
     // Get wallet balances for the actual pool tokens
     let tokenXBalance = 0;
     let tokenYBalance = 0;
@@ -1169,19 +1254,19 @@ async function showAmountInput(ctx: BotContext, pool: PoolInfo) {
             balanceInfo = `\n**Your ${pool.tokenX.symbol}:** ${tokenXBalance.toFixed(4)}\n`;
             balanceInfo += `**Your ${pool.tokenY.symbol}:** ${tokenYBalance.toFixed(4)}\n`;
         }
-    } catch (e) {}
-    
+    } catch (e) { }
+
     const minBinId = flowData.minBinId || 0;
     const maxBinId = flowData.maxBinId || 0;
     const minPrice = poolService.calculateBinPrice(minBinId, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
     const maxPrice = poolService.calculateBinPrice(maxBinId, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
-    
+
     // Show AI split recommendation if available
     let splitInfo = '';
     if (flowData.tokenXPercentage && flowData.tokenYPercentage) {
         splitInfo = `\n🤖 **AI Split:** ${flowData.tokenXPercentage}% ${pool.tokenX.symbol} / ${flowData.tokenYPercentage}% ${pool.tokenY.symbol}\n`;
     }
-    
+
     const message = `
 ➕ **CREATE POSITION - Amount Entry**
 
@@ -1214,15 +1299,15 @@ ${balanceInfo}${splitInfo}
 // Handler for auto-calculate amount option
 export async function handleAutoAmountEntry(ctx: BotContext) {
     await ctx.answerCbQuery();
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
-    
+
     // Get wallet balance for the actual tokenX
     let balanceInfo = '';
     try {
@@ -1232,12 +1317,12 @@ export async function handleAutoAmountEntry(ctx: BotContext) {
             const tokenXBalance = await getTokenBalance(keypair, pool.tokenX.mint, pool.tokenX.decimals);
             balanceInfo = `\n**Available:** ${tokenXBalance.toFixed(4)} ${pool.tokenX.symbol}\n`;
         }
-    } catch (e) {}
-    
+    } catch (e) { }
+
     const splitInfo = flowData.tokenXPercentage && flowData.tokenYPercentage
         ? `\n🤖 AI will auto-calculate ${pool.tokenY.symbol} based on ${flowData.tokenXPercentage}%/${flowData.tokenYPercentage}% split\n`
         : `\n🧮 ${pool.tokenY.symbol} will be auto-calculated based on strategy\n`;
-    
+
     const message = `
 🤖 **AUTO-CALCULATE MODE**
 
@@ -1251,7 +1336,7 @@ Example: \`0.1\`
 `.trim();
 
     ctx.session.currentFlow = 'newpos_amount_auto';
-    
+
     await ctx.editMessageText(message, {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -1266,15 +1351,15 @@ Example: \`0.1\`
 // Handler for manual amount entry
 export async function handleManualAmountEntry(ctx: BotContext) {
     await ctx.answerCbQuery();
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
-    
+
     const message = `
 ✏️ **MANUAL ENTRY MODE**
 
@@ -1290,7 +1375,7 @@ Example: \`0.5 100\`
 `.trim();
 
     ctx.session.currentFlow = 'newpos_amounts';
-    
+
     await ctx.editMessageText(message, {
         parse_mode: 'Markdown',
         reply_markup: {
@@ -1305,9 +1390,9 @@ Example: \`0.5 100\`
 // Process auto-calculate input (single amount X)
 export async function handleAutoAmountInput(ctx: BotContext, input: string) {
     ctx.session.currentFlow = 'idle';
-    
+
     const amountX = parseFloat(input.trim());
-    
+
     if (isNaN(amountX) || amountX <= 0) {
         await ctx.reply(
             '❌ Invalid amount. Please enter a positive number.',
@@ -1322,23 +1407,23 @@ export async function handleAutoAmountInput(ctx: BotContext, input: string) {
         );
         return;
     }
-    
+
     const flowData = ctx.session.flowData!;
     const pool = flowData.poolInfo as PoolInfo;
-    
+
     // Show calculating message
     await ctx.reply('🧮 Calculating optimal Y amount based on strategy...');
-    
+
     try {
         let amountY = 0;
         let calculationMethod = '';
-        
+
         // If AI recommendation exists with liquidity distribution, use it
         if (flowData.tokenXPercentage && flowData.tokenYPercentage) {
             const tokenXPercentage = flowData.tokenXPercentage / 100;
             const tokenYPercentage = flowData.tokenYPercentage / 100;
             const currentPrice = pool.price || 1;
-            
+
             // Calculate Y amount based on AI's recommended split
             // Value of X in USD: amountX * priceX
             // We want: (valueX / (valueX + valueY)) = tokenXPercentage
@@ -1346,13 +1431,13 @@ export async function handleAutoAmountInput(ctx: BotContext, input: string) {
             const valueX = amountX * currentPrice;
             const valueY = (valueX * tokenYPercentage) / tokenXPercentage;
             amountY = valueY; // USDC is already in USD terms
-            
+
             calculationMethod = `AI's ${flowData.tokenXPercentage}%/${flowData.tokenYPercentage}% split`;
         } else {
             // Fallback to SDK calculation
             const minBin = flowData.minBinId || pool.activeBin - 15;
             const maxBin = flowData.maxBinId || pool.activeBin + 15;
-            
+
             amountY = await liquidityService.calculateOptimalYAmount(
                 pool.address,
                 amountX,
@@ -1360,14 +1445,14 @@ export async function handleAutoAmountInput(ctx: BotContext, input: string) {
                 maxBin,
                 0 // Spot strategy
             );
-            
+
             calculationMethod = `${flowData.strategy || 'Spot'} strategy`;
         }
-        
+
         // Store in flow data
         flowData.amountX = amountX;
         flowData.amountY = amountY;
-        
+
         // Check if user has enough of both tokens
         const telegramId = ctx.from!.id;
         const keypair = multiWalletStorage.getActiveKeypair(telegramId);
@@ -1376,7 +1461,7 @@ export async function handleAutoAmountInput(ctx: BotContext, input: string) {
         let tokenXBalance = 0;
         let tokenYBalance = 0;
         let solBalance = 0;
-        
+
         if (keypair) {
             // Get actual token balances for the pool tokens
             const balances = await getPoolTokenBalances(keypair, pool);
@@ -1384,22 +1469,22 @@ export async function handleAutoAmountInput(ctx: BotContext, input: string) {
             tokenYBalance = balances.tokenYBalance;
             hasEnoughX = tokenXBalance >= amountX;
             hasEnoughY = tokenYBalance >= amountY;
-            
+
             // Also get SOL balance for potential swaps
             const connection = connectionService.getConnection();
             solBalance = await connection.getBalance(keypair.publicKey) / 1e9;
         }
-        
+
         // Calculate shortfalls for auto-swap
         const tokenXShortfall = Math.max(0, amountX - tokenXBalance);
         const tokenYShortfall = Math.max(0, amountY - tokenYBalance);
-        
+
         // Determine auto-swap options
         // Option 1: Short on tokenX - can swap from tokenY or SOL
         // Option 2: Short on tokenY - can swap from tokenX or SOL
         const canAutoSwapForX = !hasEnoughX && tokenXShortfall > 0 && (tokenYBalance > 0 || solBalance > 0.01);
         const canAutoSwapForY = hasEnoughX && !hasEnoughY && tokenYShortfall > 0;
-        
+
         // Build result message
         let resultMessage = `
 ✅ **Y Amount Calculated!**
@@ -1413,7 +1498,7 @@ _(Based on ${calculationMethod})_
 `;
 
         const buttons: any[] = [];
-        
+
         if (!hasEnoughX && canAutoSwapForX) {
             // Offer auto-swap to get tokenX
             resultMessage += `
@@ -1423,7 +1508,7 @@ Need: ${amountX.toFixed(4)} ${pool.tokenX.symbol}
 Shortfall: ${tokenXShortfall.toFixed(4)} ${pool.tokenX.symbol}
 
 🔄 **Auto-Swap Available!**`;
-            
+
             // Determine what we can swap from
             if (solBalance > 0.01) {
                 resultMessage += `\nYou have ${solBalance.toFixed(4)} SOL available for swap.`;
@@ -1431,14 +1516,14 @@ Shortfall: ${tokenXShortfall.toFixed(4)} ${pool.tokenX.symbol}
             if (tokenYBalance > 0) {
                 resultMessage += `\nYou have ${tokenYBalance.toFixed(4)} ${pool.tokenY.symbol} available for swap.`;
             }
-            
+
             // Store shortfall for auto-swap - swap for tokenX
             flowData.autoSwapNeeded = true;
             flowData.autoSwapDirection = 'toX'; // Swap TO tokenX
             flowData.swapAmountX = tokenXShortfall;
             flowData.availableSol = solBalance;
             flowData.availableTokenY = tokenYBalance;
-            
+
             buttons.push([{ text: `🔄 Auto-Swap & Create Position`, callback_data: 'newpos_autoswap_x' }]);
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: 'newpos_amount_auto' }]);
         } else if (!hasEnoughX) {
@@ -1460,7 +1545,7 @@ We can swap some ${pool.tokenX.symbol} to get the needed ${pool.tokenY.symbol}.
             flowData.autoSwapNeeded = true;
             flowData.autoSwapDirection = 'toY'; // Swap TO tokenY
             flowData.swapAmountY = tokenYShortfall;
-            
+
             buttons.push([{ text: `🔄 Auto-Swap & Create Position`, callback_data: 'newpos_autoswap' }]);
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: 'newpos_amount_auto' }]);
         } else if (!hasEnoughY) {
@@ -1471,17 +1556,17 @@ We can swap some ${pool.tokenX.symbol} to get the needed ${pool.tokenY.symbol}.
             flowData.step = 'confirm';
             buttons.push([{ text: '✅ Confirm & Create Position', callback_data: 'newpos_execute' }]);
         }
-        
+
         buttons.push([{ text: '⬅️ Back', callback_data: 'newpos_amounts_retry' }]);
         buttons.push([{ text: '❌ Cancel', callback_data: 'pools_menu' }]);
-        
+
         await ctx.reply(resultMessage.trim(), {
             parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: buttons
             }
         });
-        
+
     } catch (error: any) {
         console.error('Error calculating Y amount:', error);
         await ctx.reply(
@@ -1502,45 +1587,45 @@ We can swap some ${pool.tokenX.symbol} to get the needed ${pool.tokenY.symbol}.
 // Handler for auto-swap TO tokenX (e.g., swap SOL/USDC to get TRUMP)
 export async function handleAutoSwapToX(ctx: BotContext) {
     await ctx.answerCbQuery('Preparing auto-swap...');
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo || !flowData.swapAmountX) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
     const tokenXNeeded = flowData.swapAmountX;
-    
+
     try {
         await ctx.editMessageText(
             `🔄 **AUTO-SWAP PREPARATION**\n\n` +
             `Getting swap quote to acquire ${tokenXNeeded.toFixed(4)} ${pool.tokenX.symbol}...`,
             { parse_mode: 'Markdown' }
         );
-        
+
         // Determine what to swap from - prefer using USDC/tokenY first, then SOL
         // For this we need to check which route is available
         // Most common case: Use Jupiter or similar aggregator for best route
-        
+
         // Get price estimate for tokenX
         const { priceService } = await import('../../services/price.service');
         let tokenXPriceUsd = 0;
         try {
             tokenXPriceUsd = await priceService.getTokenPrice(pool.tokenX.mint) || 0;
-        } catch (e) {}
-        
+        } catch (e) { }
+
         // Estimate value needed in USD/USDC
         const valueNeededUsd = tokenXNeeded * tokenXPriceUsd;
-        
+
         // Check what we have available
         const availableSol = flowData.availableSol || 0;
         const availableTokenY = flowData.availableTokenY || 0;
-        
+
         // For now, show options to user
         let swapSource = 'SOL';
         let swapAmount = 0;
-        
+
         // Prefer swapping from tokenY (e.g., USDC) if pool supports it
         if (availableTokenY > valueNeededUsd * 1.05) { // Need enough with buffer
             swapSource = pool.tokenY.symbol;
@@ -1552,11 +1637,11 @@ export async function handleAutoSwapToX(ctx: BotContext) {
             const solPriceUsd = await priceService.getTokenPrice(NATIVE_SOL_MINT) || 140;
             swapAmount = (valueNeededUsd / solPriceUsd) * 1.05; // Add 5% buffer
         }
-        
+
         // Store swap details
         flowData.swapSource = swapSource;
         flowData.swapAmountFrom = swapAmount;
-        
+
         const message = `
 🔄 **AUTO-SWAP TO ${pool.tokenX.symbol}**
 
@@ -1583,7 +1668,7 @@ _Note: Actual amounts may vary based on market price._
                 ]
             }
         });
-        
+
     } catch (error: any) {
         console.error('Error preparing swap to X:', error);
         await ctx.editMessageText(
@@ -1605,16 +1690,16 @@ _Note: Actual amounts may vary based on market price._
 // Execute auto-swap to tokenX and create position
 export async function handleAutoSwapToXExecute(ctx: BotContext) {
     await ctx.answerCbQuery('Executing swap...');
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo || !flowData.swapAmountX) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
     const telegramId = ctx.from!.id;
-    
+
     try {
         await ctx.editMessageText(
             `⏳ **STEP 1/2: Acquiring ${pool.tokenX.symbol}**\n\n` +
@@ -1622,25 +1707,28 @@ export async function handleAutoSwapToXExecute(ctx: BotContext) {
             `_This may take 30-60 seconds..._`,
             { parse_mode: 'Markdown' }
         );
-        
+
         // Get keypair
         const keypair = multiWalletStorage.getActiveKeypair(telegramId);
         if (!keypair) {
             throw new Error('Wallet not found');
         }
-        
+
         // For swapping to tokenX, we need to:
         // 1. If pool is tokenX/USDC type, we can swap tokenY (USDC) -> tokenX directly in this pool
-        // 2. If we need SOL -> tokenX and pool isn't SOL/tokenX, we need external DEX
-        
+        // 2. If we need SOL -> tokenX and pool isn't SOL/tokenX, use Jupiter aggregator
+
         // Check if we can use this pool for the swap (e.g., TRUMP/USDC - swap USDC -> TRUMP)
         const isTokenYSource = flowData.swapSource === pool.tokenY.symbol;
-        
+        const amountToSwap = flowData.swapAmountFrom || 0;
+
+        let swapSignature: string;
+        let outputAmount: number;
+
         if (isTokenYSource) {
             // We can swap within this pool! tokenY -> tokenX
-            const amountToSwap = flowData.swapAmountFrom || 0;
             const amountInBaseUnits = new BN(Math.floor(amountToSwap * Math.pow(10, pool.tokenY.decimals)));
-            
+
             // Get quote for swapping Y -> X (swapForY = false means we're selling Y for X)
             const quote = await swapService.getSwapQuote(
                 pool.address,
@@ -1648,35 +1736,66 @@ export async function handleAutoSwapToXExecute(ctx: BotContext) {
                 false, // swapForY = false (we want tokenX out)
                 1 // 1% slippage
             );
-            
+
             // Execute the swap
-            const swapSignature = await swapService.executeSwap(pool.address, quote);
-            
-            await ctx.editMessageText(
-                `✅ **Swap Successful!**\n\n` +
-                `Acquired ~${(Number(quote.outAmount) / Math.pow(10, pool.tokenX.decimals)).toFixed(4)} ${pool.tokenX.symbol}\n` +
-                `Transaction: \`${swapSignature.slice(0, 20)}...\`\n\n` +
-                `⏳ **STEP 2/2: Creating Position**\n\n` +
-                `_Please wait..._`,
-                { parse_mode: 'Markdown' }
-            );
-            
+            swapSignature = await swapService.executeSwap(pool.address, quote);
+            outputAmount = Number(quote.outAmount) / Math.pow(10, pool.tokenX.decimals);
+
         } else {
-            // For SOL or other tokens, we need to guide user to external DEX
-            throw new Error(`Direct swap from ${flowData.swapSource} to ${pool.tokenX.symbol} requires Jupiter. Please swap manually on jup.ag first.`);
+            // Use Jupiter aggregator for SOL -> tokenX or other routes
+            console.log(`[AutoSwap] Using Jupiter: ${flowData.swapSource} → ${pool.tokenX.symbol}`);
+
+            // Determine input mint
+            let inputMint: string;
+            let inputDecimals: number;
+
+            if (flowData.swapSource === 'SOL') {
+                inputMint = 'So11111111111111111111111111111111111111112'; // Native SOL mint
+                inputDecimals = 9;
+            } else {
+                // Assume it's tokenY if not SOL
+                inputMint = pool.tokenY.mint;
+                inputDecimals = pool.tokenY.decimals;
+            }
+
+            const amountInBaseUnits = Math.floor(amountToSwap * Math.pow(10, inputDecimals)).toString();
+
+            // Use universal swap (will use Jupiter)
+            const result = await swapService.swapTokens(
+                inputMint,
+                pool.tokenX.mint,
+                amountInBaseUnits,
+                keypair,
+                1, // 1% slippage
+                pool.address // Try DLMM first, fallback to Jupiter
+            );
+
+            swapSignature = result.signature;
+            outputAmount = parseInt(result.outputAmount) / Math.pow(10, pool.tokenX.decimals);
+
+            console.log(`[AutoSwap] Jupiter swap successful via: ${result.source}`);
         }
-        
+
+        await ctx.editMessageText(
+            `✅ **Swap Successful!**\n\n` +
+            `Acquired ~${outputAmount.toFixed(4)} ${pool.tokenX.symbol}\n` +
+            `Transaction: \`${swapSignature.slice(0, 20)}...\`\n\n` +
+            `⏳ **STEP 2/2: Creating Position**\n\n` +
+            `_Please wait..._`,
+            { parse_mode: 'Markdown' }
+        );
+
         // Wait for swap to settle
         await new Promise(r => setTimeout(r, 3000));
-        
+
         // Clear swap flags and proceed to position creation
         flowData.autoSwapNeeded = false;
         flowData.swapAmountX = undefined;
         flowData.step = 'confirm';
-        
+
         // Create the position
         await handleExecuteNewPosition(ctx);
-        
+
     } catch (error: any) {
         console.error('Auto-swap to X execution error:', error);
         await ctx.editMessageText(
@@ -1701,32 +1820,32 @@ export async function handleAutoSwapToXExecute(ctx: BotContext) {
 // Handler for auto-swap and create position (swap TO tokenY)
 export async function handleAutoSwapAndCreate(ctx: BotContext) {
     await ctx.answerCbQuery('Preparing auto-swap...');
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo || !flowData.swapAmountY) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
     const usdcNeeded = flowData.swapAmountY;
-    
+
     try {
         // Get swap quote - swap X (SOL) for Y (USDC)
         // Need to calculate how much SOL to swap to get the required USDC
         const solPriceInUsdc = pool.price || 140; // fallback
         const solToSwap = (usdcNeeded / solPriceInUsdc) * 1.02; // Add 2% buffer for slippage
-        
+
         // Convert to lamports (9 decimals for SOL)
         const solToSwapLamports = new BN(Math.floor(solToSwap * 1e9));
-        
+
         await ctx.editMessageText(
             `🔄 **AUTO-SWAP PREPARATION**\n\n` +
             `Getting swap quote...\n` +
             `Swapping ~${solToSwap.toFixed(6)} ${pool.tokenX.symbol} for ~${usdcNeeded.toFixed(2)} ${pool.tokenY.symbol}`,
             { parse_mode: 'Markdown' }
         );
-        
+
         // Get swap quote
         const quote = await swapService.getSwapQuote(
             pool.address,
@@ -1734,14 +1853,14 @@ export async function handleAutoSwapAndCreate(ctx: BotContext) {
             true, // swapForY = true (SOL -> USDC)
             1 // 1% slippage
         );
-        
+
         const expectedUsdc = Number(quote.outAmount) / 1e6; // USDC has 6 decimals
         const priceImpact = quote.priceImpact * 100;
-        
+
         // Update flow data
         flowData.swapQuote = quote;
         flowData.solToSwap = solToSwap;
-        
+
         const message = `
 🔄 **AUTO-SWAP CONFIRMATION**
 
@@ -1769,7 +1888,7 @@ export async function handleAutoSwapAndCreate(ctx: BotContext) {
                 ]
             }
         });
-        
+
     } catch (error: any) {
         console.error('Error getting swap quote:', error);
         await ctx.editMessageText(
@@ -1790,16 +1909,16 @@ export async function handleAutoSwapAndCreate(ctx: BotContext) {
 // Execute auto-swap and then create position
 export async function handleAutoSwapExecute(ctx: BotContext) {
     await ctx.answerCbQuery('Executing swap...');
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolInfo || !flowData.swapQuote) {
         await ctx.editMessageText('Session expired. Please start again.');
         return;
     }
-    
+
     const pool = flowData.poolInfo as PoolInfo;
     const telegramId = ctx.from!.id;
-    
+
     try {
         await ctx.editMessageText(
             `⏳ **STEP 1/2: Executing Swap**\n\n` +
@@ -1807,10 +1926,10 @@ export async function handleAutoSwapExecute(ctx: BotContext) {
             `_Please wait, this may take 30-60 seconds..._`,
             { parse_mode: 'Markdown' }
         );
-        
+
         // Execute the swap
         const swapSignature = await swapService.executeSwap(pool.address, flowData.swapQuote);
-        
+
         await ctx.editMessageText(
             `✅ **Swap Successful!**\n\n` +
             `Transaction: \`${swapSignature.slice(0, 20)}...\`\n\n` +
@@ -1818,18 +1937,18 @@ export async function handleAutoSwapExecute(ctx: BotContext) {
             `_Please wait..._`,
             { parse_mode: 'Markdown' }
         );
-        
+
         // Wait a moment for the swap to settle
         await new Promise(r => setTimeout(r, 2000));
-        
+
         // Clear the swap flag and proceed to position creation
         flowData.autoSwapNeeded = false;
         flowData.swapQuote = undefined;
         flowData.step = 'confirm';
-        
+
         // Now create the position (call the execute handler directly)
         await handleExecuteNewPosition(ctx);
-        
+
     } catch (error: any) {
         console.error('Auto-swap execution error:', error);
         await ctx.editMessageText(
@@ -1850,7 +1969,7 @@ export async function handleAutoSwapExecute(ctx: BotContext) {
 
 export async function handleAmountInput(ctx: BotContext, input: string) {
     ctx.session.currentFlow = 'idle';
-    
+
     const parts = input.trim().split(/\s+/);
     if (parts.length !== 2) {
         await ctx.reply(
@@ -1866,10 +1985,10 @@ export async function handleAmountInput(ctx: BotContext, input: string) {
         );
         return;
     }
-    
+
     const amountX = parseFloat(parts[0]);
     const amountY = parseFloat(parts[1]);
-    
+
     if (isNaN(amountX) || isNaN(amountY) || (amountX <= 0 && amountY <= 0)) {
         await ctx.reply(
             '❌ Invalid amounts. At least one amount must be > 0.',
@@ -1884,12 +2003,12 @@ export async function handleAmountInput(ctx: BotContext, input: string) {
         );
         return;
     }
-    
+
     const flowData = ctx.session.flowData!;
     flowData.amountX = amountX;
     flowData.amountY = amountY;
     flowData.step = 'confirm';
-    
+
     // Show confirmation
     await showConfirmation(ctx);
 }
@@ -1899,12 +2018,12 @@ export async function handleAmountInput(ctx: BotContext, input: string) {
 async function showConfirmation(ctx: BotContext) {
     const flowData = ctx.session.flowData!;
     const pool = flowData.poolInfo as PoolInfo;
-    
+
     const minBinId = flowData.minBinId || 0;
     const maxBinId = flowData.maxBinId || 0;
     const minPrice = poolService.calculateBinPrice(minBinId, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
     const maxPrice = poolService.calculateBinPrice(maxBinId, pool.binStep, pool.tokenX.decimals, pool.tokenY.decimals);
-    
+
     const message = `
 ✅ **CONFIRM POSITION**
 
@@ -1943,19 +2062,19 @@ Transaction fees will apply.
 export async function handleExecuteNewPosition(ctx: BotContext) {
     const telegramId = ctx.from?.id;
     if (!telegramId) return;
-    
+
     const keypair = multiWalletStorage.getActiveKeypair(telegramId);
     if (!keypair) {
         await ctx.answerCbQuery('No wallet connected');
         return;
     }
-    
+
     const flowData = ctx.session.flowData;
     if (!flowData?.poolAddress || !flowData.amountX === undefined) {
         await ctx.answerCbQuery('Session expired');
         return;
     }
-    
+
     await ctx.answerCbQuery('Creating position...');
     await ctx.editMessageText(
         '🔄 **Creating position...**\n\n' +
@@ -1963,47 +2082,47 @@ export async function handleExecuteNewPosition(ctx: BotContext) {
         'This may take 30-60 seconds.',
         { parse_mode: 'Markdown' }
     );
-    
+
     try {
         const { positionService } = await import('../../services/position.service');
         const { StrategyType } = await import('@meteora-ag/dlmm');
         const { Keypair: SolanaKeypair, sendAndConfirmTransaction } = await import('@solana/web3.js');
         const { BN } = await import('@coral-xyz/anchor');
         const { connectionService } = await import('../../services/connection.service');
-        
+
         const pool = flowData.poolInfo as PoolInfo;
         const connection = connectionService.getConnection();
         const dlmm = await poolService.getDlmmInstance(pool.address);
-        
+
         // Calculate bin count and estimate rent requirement
         const totalBins = (flowData.maxBinId || 0) - (flowData.minBinId || 0) + 1;
         const RENT_PER_BIN_LAMPORTS = 890; // ~0.00089 SOL per bin
         const BASE_POSITION_RENT_LAMPORTS = 3_000_000; // ~0.003 SOL base rent
         const TX_FEE_BUFFER_LAMPORTS = 10_000_000; // ~0.01 SOL buffer for tx fees
-        
-        const estimatedRentLamports = BASE_POSITION_RENT_LAMPORTS + 
-            (totalBins * RENT_PER_BIN_LAMPORTS) + 
+
+        const estimatedRentLamports = BASE_POSITION_RENT_LAMPORTS +
+            (totalBins * RENT_PER_BIN_LAMPORTS) +
             TX_FEE_BUFFER_LAMPORTS;
-        
+
         // Check SOL balance before proceeding
         const walletBalance = await connection.getBalance(keypair.publicKey);
-        
+
         if (walletBalance < estimatedRentLamports) {
             const requiredSOL = estimatedRentLamports / 1_000_000_000;
             const currentSOL = walletBalance / 1_000_000_000;
             const shortfallSOL = requiredSOL - currentSOL;
-            
+
             // Calculate bins that could be afforded with current balance
             const availableForRent = Math.max(0, walletBalance - TX_FEE_BUFFER_LAMPORTS - BASE_POSITION_RENT_LAMPORTS);
             const affordableBins = Math.floor(availableForRent / RENT_PER_BIN_LAMPORTS);
-            
+
             let suggestionText = '';
             if (affordableBins >= 10) {
                 suggestionText = `\n\n💡 **Alternative:** You could create a smaller ${affordableBins}-bin position with your current balance.`;
             } else {
                 suggestionText = `\n\n💡 **Suggestion:** Add at least ${shortfallSOL.toFixed(4)} SOL to your wallet before creating this position.`;
             }
-            
+
             await ctx.editMessageText(
                 `❌ **Insufficient SOL for Position Rent**\n\n` +
                 `**Position Requirements:**\n` +
@@ -2028,7 +2147,7 @@ export async function handleExecuteNewPosition(ctx: BotContext) {
             );
             return;
         }
-        
+
         // Check maximum bin limit 
         // Meteora DLMM has DEFAULT_BIN_PER_POSITION = 70 as the base position size
         // Positions > 70 bins require resize instructions which can fail with realloc errors
@@ -2037,7 +2156,7 @@ export async function handleExecuteNewPosition(ctx: BotContext) {
         if (totalBins > MAX_BINS_SINGLE_TX) {
             const activeBin = flowData.activeBinId || pool.activeBin;
             const suggestedBinsPerSide = Math.floor(MAX_BINS_SINGLE_TX / 2);
-            
+
             await ctx.editMessageText(
                 `⚠️ **Position Size Limit**\n\n` +
                 `You're trying to create a **${totalBins}-bin** position.\n\n` +
@@ -2057,27 +2176,27 @@ export async function handleExecuteNewPosition(ctx: BotContext) {
             );
             return;
         }
-        
+
         // Create new position keypair
         const newPositionKeypair = SolanaKeypair.generate();
-        
+
         // Convert amounts to BN (use defaults if undefined)
         const amountXValue = flowData.amountX || 0;
         const amountYValue = flowData.amountY || 0;
         const amountX = new BN(Math.floor(amountXValue * (10 ** pool.tokenX.decimals)));
         const amountY = new BN(Math.floor(amountYValue * (10 ** pool.tokenY.decimals)));
-        
+
         // Map strategy
         const strategyType = flowData.strategy === 'Spot' ? StrategyType.Spot :
-                            flowData.strategy === 'Curve' ? StrategyType.Curve : 
-                            StrategyType.BidAsk;
-        
+            flowData.strategy === 'Curve' ? StrategyType.Curve :
+                StrategyType.BidAsk;
+
         const strategy = {
             maxBinId: flowData.maxBinId || 0,
             minBinId: flowData.minBinId || 0,
             strategyType
         };
-        
+
         // Create position
         const tx = await dlmm.initializePositionAndAddLiquidityByStrategy({
             positionPubKey: newPositionKeypair.publicKey,
@@ -2087,20 +2206,20 @@ export async function handleExecuteNewPosition(ctx: BotContext) {
             strategy,
             slippage: 100 // 1%
         });
-        
+
         const signature = await sendAndConfirmTransaction(
             connection,
             tx,
             [keypair, newPositionKeypair],
             { commitment: 'confirmed' }
         );
-        
+
         // Clear flow data
         ctx.session.flowData = undefined;
         ctx.session.currentFlow = 'idle';
-        
+
         console.log(chalk.green(`✓ User ${telegramId} created position ${newPositionKeypair.publicKey.toBase58()}`));
-        
+
         await ctx.editMessageText(
             `✅ **POSITION CREATED!**\n\n` +
             `**Pool:** ${pool.tokenX.symbol}/${pool.tokenY.symbol}\n` +
@@ -2121,34 +2240,34 @@ export async function handleExecuteNewPosition(ctx: BotContext) {
                 }
             }
         );
-        
+
     } catch (error: any) {
         console.error('Position creation error:', error);
-        
+
         const errorMessage = error.message || 'Unknown error';
         let userFriendlyMessage = `Error: ${errorMessage}`;
         let suggestions = '';
-        
+
         // Parse insufficient lamports error
         const lamportsMatch = errorMessage.match(/insufficient lamports (\d+), need (\d+)/);
         if (lamportsMatch) {
             const available = parseInt(lamportsMatch[1]) / 1_000_000_000;
             const needed = parseInt(lamportsMatch[2]) / 1_000_000_000;
             const shortfall = needed - available;
-            
-            userFriendlyMessage = 
+
+            userFriendlyMessage =
                 `**Insufficient SOL for Transaction**\n\n` +
                 `• Available: ${available.toFixed(4)} SOL\n` +
                 `• Required: ${needed.toFixed(4)} SOL\n` +
                 `• Shortfall: ${shortfall.toFixed(4)} SOL`;
-            
+
             suggestions = `\n\n💡 **Fix:** Add at least ${shortfall.toFixed(4)} SOL to your wallet, or try a smaller bin range to reduce rent costs.`;
         } else if (errorMessage.includes('realloc') || errorMessage.includes('InvalidRealloc') || errorMessage.includes('10240')) {
             // Account reallocation limit error - too many bins
-            userFriendlyMessage = 
+            userFriendlyMessage =
                 `**Too Many Bins for Single Transaction**\n\n` +
                 `Solana has a 10KB limit per transaction, and your position exceeds this.`;
-            
+
             suggestions = `\n\n💡 **Fix:** Use 120 bins or fewer. Go back and select a smaller range.`;
         } else if (errorMessage.includes('insufficient funds')) {
             suggestions = `\n\n💡 Check that you have enough SOL for transaction fees and position rent (~0.01-0.1 SOL depending on bin count).`;
@@ -2157,7 +2276,7 @@ export async function handleExecuteNewPosition(ctx: BotContext) {
         } else if (errorMessage.includes('timeout') || errorMessage.includes('block height')) {
             suggestions = `\n\n💡 Network congestion. Please try again in a few moments.`;
         }
-        
+
         await ctx.editMessageText(
             `❌ **Position creation failed**\n\n` +
             userFriendlyMessage +

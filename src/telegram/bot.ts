@@ -103,6 +103,7 @@ import {
     handleMonitorAutoToggle,
     handleMonitorRunNow,
     handleMonitorLastReport,
+    handleRestartScheduler,
 } from './handlers/monitor';
 
 // Analytics handlers
@@ -861,6 +862,7 @@ bot.action(/^monitor_int_\d+$/, handleMonitorIntervalSelect);
 bot.action('monitor_auto_toggle', handleMonitorAutoToggle);
 bot.action('monitor_run_now', handleMonitorRunNow);
 bot.action('monitor_last_report', handleMonitorLastReport);
+bot.action('monitor_restart_scheduler', handleRestartScheduler);
 
 // ==================== ALERTS ACTIONS ====================
 bot.action('settings_alerts', handleAlertsMenu);
@@ -1236,6 +1238,16 @@ export async function startBot() {
             } else {
                 res.writeHead(404);
                 res.end('Not Found');
+            }
+        });
+        
+        // Handle port already in use error gracefully
+        healthServer.on('error', (err: NodeJS.ErrnoException) => {
+            if (err.code === 'EADDRINUSE') {
+                console.log(chalk.yellow(`⚠️ Port ${PORT} already in use - health check server skipped (local dev mode)`));
+                console.log(chalk.gray('   This is normal when running locally. Health server is required for Render deployment.'));
+            } else {
+                console.error(chalk.red(`❌ Health server error: ${err.message}`));
             }
         });
         

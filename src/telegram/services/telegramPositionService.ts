@@ -591,6 +591,23 @@ export interface TelegramRebalanceAnalysis {
     aiReasoning?: string[];
     aiRisks?: string[];
     aiMarketInsight?: string;
+    // NEW: Enhanced risk assessment
+    aiRiskAssessment?: {
+        impermanentLoss?: {
+            ifPriceUp10Percent: number;
+            ifPriceDown10Percent: number;
+        };
+        supportDistance?: number;
+        resistanceDistance?: number;
+        rebalanceProbability7Days?: number;
+    };
+    // NEW: Strategy evaluation
+    aiStrategyEvaluation?: {
+        currentStrategy: 'Spot' | 'Curve' | 'BidAsk';
+        isOptimal: boolean;
+        reason: string;
+        suggestedStrategy?: 'Spot' | 'Curve' | 'BidAsk';
+    };
 }
 
 /**
@@ -768,6 +785,16 @@ export async function getRebalanceAnalysis(
                     result.aiRisks = aiDecision.risks || [];
                     if (aiDecision.marketInsight) {
                         result.aiMarketInsight = aiDecision.marketInsight;
+                    }
+                    
+                    // NEW: Pass through enhanced risk assessment
+                    if (aiDecision.riskAssessment) {
+                        result.aiRiskAssessment = aiDecision.riskAssessment;
+                    }
+                    
+                    // NEW: Pass through strategy evaluation
+                    if (aiDecision.strategyEvaluation) {
+                        result.aiStrategyEvaluation = aiDecision.strategyEvaluation;
                     }
 
                     // If AI provides a suggested range, use it instead of the default

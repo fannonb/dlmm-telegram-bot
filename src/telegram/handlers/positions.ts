@@ -835,6 +835,46 @@ export async function handleRebalancePosition(ctx: BotContext, shortAddr: string
             : mainReason;
         message += `${cleanReason}\n`;
 
+        // Strategy evaluation - NEW
+        if (analysis.aiStrategyEvaluation) {
+            const strat = analysis.aiStrategyEvaluation;
+            const stratEmoji = strat.isOptimal ? '✅' : '⚠️';
+            message += `\n📊 **Strategy Evaluation**\n`;
+            message += `Current: **${strat.currentStrategy}** ${stratEmoji}\n`;
+            if (!strat.isOptimal && strat.suggestedStrategy) {
+                message += `Suggested: **${strat.suggestedStrategy}**\n`;
+            }
+            message += `${strat.reason}\n`;
+        }
+
+        // Risk Assessment - NEW
+        if (analysis.aiRiskAssessment) {
+            const risk = analysis.aiRiskAssessment;
+            message += `\n📈 **Risk Assessment**\n`;
+            
+            if (risk.impermanentLoss) {
+                message += `IL if +10%: ${risk.impermanentLoss.ifPriceUp10Percent.toFixed(2)}% | `;
+                message += `IL if -10%: ${risk.impermanentLoss.ifPriceDown10Percent.toFixed(2)}%\n`;
+            }
+            
+            const riskMetrics: string[] = [];
+            if (typeof risk.supportDistance === 'number') {
+                riskMetrics.push(`Support: ${risk.supportDistance.toFixed(1)}% below`);
+            }
+            if (typeof risk.resistanceDistance === 'number') {
+                riskMetrics.push(`Resistance: ${risk.resistanceDistance.toFixed(1)}% above`);
+            }
+            if (riskMetrics.length > 0) {
+                message += riskMetrics.join(' | ') + '\n';
+            }
+            
+            if (typeof risk.rebalanceProbability7Days === 'number') {
+                const probEmoji = risk.rebalanceProbability7Days > 70 ? '🔴' : 
+                                  risk.rebalanceProbability7Days > 40 ? '🟡' : '🟢';
+                message += `${probEmoji} Rebalance likelihood (7d): ${risk.rebalanceProbability7Days}%\n`;
+            }
+        }
+
         // Context: what the AI is monitoring
         const monitoringNotes: string[] = [];
         if (typeof analysis.distanceToEdge === 'number' && !Number.isNaN(analysis.distanceToEdge)) {
@@ -2543,6 +2583,46 @@ export async function handleAIAnalysis(ctx: BotContext, shortAddr: string) {
         topReasons.forEach(reason => {
             message += `• ${reason}\n`;
         });
+
+        // Strategy evaluation - NEW (matching rebalance display)
+        const strategyEval = (analysis as any).strategyEvaluation;
+        if (strategyEval) {
+            const stratEmoji = strategyEval.isOptimal ? '✅' : '⚠️';
+            message += `\n📊 **Strategy Evaluation**\n`;
+            message += `Current: **${strategyEval.currentStrategy}** ${stratEmoji}\n`;
+            if (!strategyEval.isOptimal && strategyEval.suggestedStrategy) {
+                message += `Suggested: **${strategyEval.suggestedStrategy}**\n`;
+            }
+            message += `${strategyEval.reason}\n`;
+        }
+
+        // Risk Assessment - NEW (matching rebalance display)
+        const riskAssess = (analysis as any).riskAssessment;
+        if (riskAssess) {
+            message += `\n📈 **Risk Assessment**\n`;
+            
+            if (riskAssess.impermanentLoss) {
+                message += `IL if +10%: ${riskAssess.impermanentLoss.ifPriceUp10Percent.toFixed(2)}% | `;
+                message += `IL if -10%: ${riskAssess.impermanentLoss.ifPriceDown10Percent.toFixed(2)}%\n`;
+            }
+            
+            const riskMetrics: string[] = [];
+            if (typeof riskAssess.supportDistance === 'number') {
+                riskMetrics.push(`Support: ${riskAssess.supportDistance.toFixed(1)}% below`);
+            }
+            if (typeof riskAssess.resistanceDistance === 'number') {
+                riskMetrics.push(`Resistance: ${riskAssess.resistanceDistance.toFixed(1)}% above`);
+            }
+            if (riskMetrics.length > 0) {
+                message += riskMetrics.join(' | ') + '\n';
+            }
+            
+            if (typeof riskAssess.rebalanceProbability7Days === 'number') {
+                const probEmoji = riskAssess.rebalanceProbability7Days > 70 ? '🔴' : 
+                                  riskAssess.rebalanceProbability7Days > 40 ? '🟡' : '🟢';
+                message += `${probEmoji} Rebalance likelihood (7d): ${riskAssess.rebalanceProbability7Days}%\n`;
+            }
+        }
 
         // Expected outcome if taking action
         if ((analysis as any).expectedOutcome && analysis.action !== 'hold') {

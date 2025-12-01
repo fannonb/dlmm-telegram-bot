@@ -64,7 +64,8 @@ export async function handleMonitorSettings(ctx: BotContext): Promise<void> {
             }
         }
 
-        const isSchedulerRunning = updatedSchedulerStatus.isRunning ? '🟢 Running' : '🔴 Stopped';
+        const isSchedulerRunning = updatedSchedulerStatus.isRunning;
+        const schedulerStatusText = isSchedulerRunning ? '🟢 Running' : '🔴 Stopped';
 
         const message = `📡 **Position Monitor**
 
@@ -73,7 +74,7 @@ export async function handleMonitorSettings(ctx: BotContext): Promise<void> {
 **Auto-Rebalance:** ${state.autoRebalance ? '✅ Enabled' : '❌ Disabled'}
 ${lastCheckInfo}
 
-**Background Scheduler:** ${isSchedulerRunning}
+**Background Scheduler:** ${schedulerStatusText}
 **Active Monitors:** ${updatedSchedulerStatus.activeMonitors}
 
 **How it works:**
@@ -86,7 +87,7 @@ ${lastCheckInfo}
 
         await ctx.editMessageText(message, {
             parse_mode: 'Markdown',
-            reply_markup: monitorSettingsKeyboard(state.enabled, state.intervalMinutes, state.autoRebalance)
+            reply_markup: monitorSettingsKeyboard(state.enabled, state.intervalMinutes, state.autoRebalance, isSchedulerRunning)
         });
         await ctx.answerCbQuery();
     } catch (error) {
@@ -223,9 +224,9 @@ export async function handleMonitorAutoToggle(ctx: BotContext): Promise<void> {
         monitoringScheduler.setAutoRebalance(userId, newValue);
 
         if (newValue) {
-            await ctx.answerCbQuery('✅ Auto-rebalance enabled');
+            await ctx.answerCbQuery('✅ Auto-rebalance enabled! Out-of-range positions will be automatically rebalanced.');
         } else {
-            await ctx.answerCbQuery('❌ Auto-rebalance disabled');
+            await ctx.answerCbQuery('❌ Auto-rebalance disabled. You will only receive alerts.');
         }
 
         // Refresh the menu
@@ -396,5 +397,38 @@ export async function handleMonitorLastReport(ctx: BotContext): Promise<void> {
     } catch (error) {
         console.error('Error showing last report:', error);
         await ctx.answerCbQuery('❌ Error loading report');
+    }
+}
+
+/**
+ * Manually restart the background scheduler
+ */
+export async function handleRestartScheduler(ctx: BotContext): Promise<void> {
+    try {
+        const userId = ctx.from?.id;
+        if (!userId) {
+            await ctx.answerCbQuery('❌ User not found');
+            return;
+        }
+
+        console.log(`[Monitor] User ${userId} manually restarting scheduler`);
+        
+        // Force start the scheduler
+        await monitoringScheduler.start();
+        
+        // Re-enable this user's monitoring if it was enabled
+        const state = monitoringScheduler.getMonitorState(userId);
+        if (state.enabled) {
+            monitoringScheduler.enableMonitoring(userId, state.intervalMinutes);
+        }
+        
+        await ctx.answerCbQuery('✅ Scheduler restarted!');
+        
+        // Refresh the monitor view
+        await handleMonitorSettings(ctx);
+        
+    } catch (error) {
+        console.error('Error restarting scheduler:', error);
+        await ctx.answerCbQuery('❌ Error restarting scheduler');
     }
 }

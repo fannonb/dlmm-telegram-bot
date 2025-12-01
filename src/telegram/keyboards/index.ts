@@ -228,17 +228,23 @@ export function settingsKeyboard(): InlineKeyboardMarkup {
     };
 }
 
-export function monitorSettingsKeyboard(isEnabled: boolean, interval: number, autoRebalance: boolean): InlineKeyboardMarkup {
-    return {
-        inline_keyboard: [
-            [{ text: isEnabled ? '🟢 Monitor: ON' : '🔴 Monitor: OFF', callback_data: 'monitor_toggle' }],
-            [{ text: `⏱️ Interval: ${interval} min`, callback_data: 'monitor_interval' }],
-            [{ text: autoRebalance ? '✅ Auto-Rebalance: ON' : '❌ Auto-Rebalance: OFF', callback_data: 'monitor_auto_toggle' }],
-            [{ text: '▶️ Run Check Now', callback_data: 'monitor_run_now' }],
-            [{ text: '📋 View Last Report', callback_data: 'monitor_last_report' }],
-            [{ text: '⬅️ Back to Settings', callback_data: 'settings_main' }],
-        ],
-    };
+export function monitorSettingsKeyboard(isEnabled: boolean, interval: number, autoRebalance: boolean, isSchedulerRunning: boolean = true): InlineKeyboardMarkup {
+    const buttons: Array<Array<{ text: string; callback_data: string }>> = [
+        [{ text: isEnabled ? '🟢 Monitor: ON' : '🔴 Monitor: OFF', callback_data: 'monitor_toggle' }],
+        [{ text: `⏱️ Interval: ${interval} min`, callback_data: 'monitor_interval' }],
+        [{ text: autoRebalance ? '✅ Auto-Rebalance: ON' : '❌ Auto-Rebalance: OFF', callback_data: 'monitor_auto_toggle' }],
+        [{ text: '▶️ Run Check Now', callback_data: 'monitor_run_now' }],
+    ];
+    
+    // Show restart button if scheduler is stopped
+    if (!isSchedulerRunning) {
+        buttons.push([{ text: '🔄 Restart Scheduler', callback_data: 'monitor_restart_scheduler' }]);
+    }
+    
+    buttons.push([{ text: '📋 View Last Report', callback_data: 'monitor_last_report' }]);
+    buttons.push([{ text: '⬅️ Back to Settings', callback_data: 'settings_main' }]);
+    
+    return { inline_keyboard: buttons };
 }
 
 export function monitorIntervalKeyboard(): InlineKeyboardMarkup {

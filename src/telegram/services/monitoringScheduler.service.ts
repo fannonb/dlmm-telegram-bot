@@ -22,6 +22,7 @@ import { telegramNotificationsService, PortfolioSummary } from './telegramNotifi
 import { positionService } from '../../services/position.service';
 import { poolService } from '../../services/pool.service';
 import { llmAgent } from '../../services/llmAgent.service';
+import { executeRebalanceWithKeypair } from './telegramPositionService';
 
 // ==================== TYPES ====================
 
@@ -450,6 +451,11 @@ class MonitoringSchedulerService {
                         await this.sendRebalanceSuggestion(telegramId, position, pairName);
                     }
                 }
+                
+                // AUTO-REBALANCE: Execute if enabled and position is out of range
+                if (state.autoRebalance) {
+                    await this.executeAutoRebalance(telegramId, position, pairName, poolInfo);
+                }
             }
 
             // 2. Check near edge
@@ -656,6 +662,175 @@ class MonitoringSchedulerService {
             }
         } catch (error) {
             console.error(`[MonitoringScheduler] Error getting AI suggestion:`, error);
+        }
+    }
+
+    // ==================== AUTO-REBALANCE EXECUTION ====================
+
+    /**
+     * Execute automatic rebalance for a position
+     */
+    private async executeAutoRebalance(
+        telegramId: number,
+        position: any,
+        pairName: string,
+        poolInfo: any
+    ): Promise<void> {
+        console.log(`[MonitoringScheduler] 🔄 Initiating auto-rebalance for ${pairName} (user ${telegramId})`);
+        
+        try {
+            // Get user's keypair
+            const keypair = multiWalletStorage.getActiveKeypair(telegramId);
+            if (!keypair) {
+                console.warn(`[MonitoringScheduler] No keypair for user ${telegramId}, skipping auto-rebalance`);
+                return;
+            }
+
+            // Check if position has minimum value to rebalance (avoid dust positions)
+            const positionValue = position.totalValueUsd || 0;
+            if (positionValue < 1) {
+                console.log(`[MonitoringScheduler] Position value too low ($${positionValue.toFixed(2)}), skipping auto-rebalance`);
+                return;
+            }
+
+            // Notify user that auto-rebalance is starting
+            await telegramNotificationsService.sendAutoRebalanceStarted(
+                telegramId,
+                position.publicKey,
+                pairName,
+                'Position is out of range and not earning fees'
+            );
+
+            // Determine bins per side based on pool characteristics
+            const tokenXSymbol = poolInfo?.tokenX?.symbol || '';
+            const tokenYSymbol = poolInfo?.tokenY?.symbol || '';
+            const stableSymbols = ['USDC', 'USDT', 'DAI', 'PYUSD'];
+            const memeTokens = ['BONK', 'WIF', 'POPCAT', 'BOME', 'MEW', 'MYRO', 'SLERF', 'TRUMP'];
+            const isStablePair = stableSymbols.includes(tokenXSymbol) && stableSymbols.includes(tokenYSymbol);
+            const isMemeToken = memeTokens.includes(tokenXSymbol) || memeTokens.includes(tokenYSymbol);
+            const hasStable = stableSymbols.includes(tokenXSymbol) || stableSymbols.includes(tokenYSymbol);
+            
+            let binsPerSide: number;
+            if (isStablePair) {
+                binsPerSide = 20;
+            } else if (isMemeToken || hasStable) {
+                binsPerSide = 34; // Max allowed
+            } else {
+                binsPerSide = 25;
+            }
+
+            // Execute the rebalance
+            const result = await executeRebalanceWithKeypair(
+                position.poolAddress,
+                position.publicKey,
+                keypair,
+                binsPerSide
+            );
+
+            if (result.success) {
+                console.log(`[MonitoringScheduler] ✅ Auto-rebalance successful for ${pairName}`);
+                
+                // Calculate new range prices for display
+                let newRangeMin = result.newRangeMin;
+                let newRangeMax = result.newRangeMax;
+                
+                // Try to convert to USD prices if possible
+                if (poolInfo) {
+                    const binStep = poolInfo.binStep || 1;
+                    const tokenXDecimals = poolInfo.tokenX?.decimals || 9;
+                    const tokenYDecimals = poolInfo.tokenY?.decimals || 6;
+                    const activeBin = poolInfo.activeBin;
+                    
+                    try {
+                        const { priceService } = await import('../../services/price.service');
+                        const currentUsd = poolInfo.tokenX?.mint 
+                            ? await priceService.getTokenPrice(poolInfo.tokenX.mint) || 0 
+                            : 0;
+                        
+                        if (currentUsd > 0) {
+                            const binRatioActive = poolService.calculateBinPrice(activeBin, binStep, tokenXDecimals, tokenYDecimals);
+                            const binRatioMin = poolService.calculateBinPrice(result.newRangeMin, binStep, tokenXDecimals, tokenYDecimals);
+                            const binRatioMax = poolService.calculateBinPrice(result.newRangeMax, binStep, tokenXDecimals, tokenYDecimals);
+                            
+                            if (binRatioActive > 0) {
+                                newRangeMin = currentUsd * (binRatioMin / binRatioActive);
+                                newRangeMax = currentUsd * (binRatioMax / binRatioActive);
+                            }
+                        }
+                    } catch (priceError) {
+                        // Use bin IDs as fallback
+                    }
+                }
+                
+                // Send success notification
+                await telegramNotificationsService.sendAutoRebalanceSuccess(
+                    telegramId,
+                    position.publicKey,
+                    result.newPositionAddress,
+                    pairName,
+                    {
+                        oldRange: { 
+                            min: position.lowerBinId, 
+                            max: position.upperBinId 
+                        },
+                        newRange: { 
+                            min: newRangeMin, 
+                            max: newRangeMax 
+                        },
+                        withdrawnUsd: result.withdrawnUsd,
+                        txSignatures: result.transactions
+                    }
+                );
+                
+                // Log to analytics
+                try {
+                    const { analyticsDataStore } = await import('../../services/analyticsDataStore.service');
+                    analyticsDataStore.recordRebalance({
+                        timestamp: Date.now(),
+                        oldPositionAddress: position.publicKey,
+                        newPositionAddress: result.newPositionAddress,
+                        poolAddress: position.poolAddress,
+                        reasonCode: 'AUTO',
+                        reason: 'Auto-rebalance: Position was out of range',
+                        feesClaimedX: 0,
+                        feesClaimedY: 0,
+                        feesClaimedUsd: 0,
+                        transactionCostUsd: 0.03,
+                        oldRange: { min: position.lowerBinId, max: position.upperBinId },
+                        newRange: { min: result.newRangeMin, max: result.newRangeMax },
+                        signature: result.transactions[0]
+                    });
+                } catch (analyticsError) {
+                    console.warn('[MonitoringScheduler] Failed to log auto-rebalance to analytics:', analyticsError);
+                }
+                
+            } else {
+                throw new Error('Rebalance transaction failed');
+            }
+
+        } catch (error: any) {
+            console.error(`[MonitoringScheduler] ❌ Auto-rebalance failed for ${pairName}:`, error);
+            
+            // Determine helpful suggestion based on error
+            let suggestion: string | undefined;
+            const errorMsg = error.message?.toLowerCase() || '';
+            
+            if (errorMsg.includes('insufficient') || errorMsg.includes('balance')) {
+                suggestion = 'Check your SOL balance for transaction fees';
+            } else if (errorMsg.includes('slippage') || errorMsg.includes('price')) {
+                suggestion = 'Price moved during transaction. Try again or use manual rebalance.';
+            } else if (errorMsg.includes('timeout') || errorMsg.includes('network')) {
+                suggestion = 'Network issue. Will retry on next check.';
+            }
+            
+            // Send failure notification
+            await telegramNotificationsService.sendAutoRebalanceFailed(
+                telegramId,
+                position.publicKey,
+                pairName,
+                error.message || 'Unknown error',
+                suggestion
+            );
         }
     }
 

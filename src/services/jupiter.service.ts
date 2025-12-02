@@ -7,7 +7,8 @@ import { Connection, PublicKey, VersionedTransaction, TransactionMessage, Transa
 import { Keypair } from '@solana/web3.js';
 import { connectionService } from './connection.service';
 
-const JUPITER_API_BASE = 'https://quote-api.jup.ag/v6';
+// Jupiter Public API - free endpoint (no auth required)
+const JUPITER_API_BASE = 'https://public.jupiterapi.com';
 
 export interface JupiterQuote {
   inputMint: string;
@@ -52,7 +53,7 @@ export class JupiterService {
   }
 
   /**
-   * Get a swap quote from Jupiter
+   * Get a swap quote from Jupiter with retry logic
    */
   public async getQuote(
     inputMint: string,
@@ -70,20 +71,55 @@ export class JupiterService {
     url.searchParams.append('onlyDirectRoutes', 'false');
     url.searchParams.append('asLegacyTransaction', 'false');
 
-    const response = await fetch(url.toString());
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Jupiter quote failed: ${response.status} - ${errorText}`);
-    }
+    // Retry logic for network issues
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+        
+        const response = await fetch(url.toString(), {
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+          }
+        });
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Jupiter quote failed: ${response.status} - ${errorText}`);
+        }
 
-    const quote = await response.json() as JupiterQuote & { error?: string };
-    
-    if (quote.error) {
-      throw new Error(`Jupiter quote error: ${quote.error}`);
-    }
+        const quote = await response.json() as JupiterQuote & { error?: string };
+        
+        if (quote.error) {
+          throw new Error(`Jupiter quote error: ${quote.error}`);
+        }
 
-    return quote;
+        return quote;
+      } catch (error: any) {
+        lastError = error;
+        const isNetworkError = error.code === 'ENOTFOUND' || 
+                               error.code === 'ECONNREFUSED' ||
+                               error.name === 'AbortError' ||
+                               error.message?.includes('fetch failed');
+        
+        if (isNetworkError && attempt < 3) {
+          console.warn(`[Jupiter] Network error on attempt ${attempt}, retrying in ${attempt}s...`);
+          await new Promise(r => setTimeout(r, attempt * 1000));
+          continue;
+        }
+        
+        // If it's a network error, provide helpful message
+        if (isNetworkError) {
+          throw new Error(`Network error connecting to Jupiter API. Please check your internet connection and try again.`);
+        }
+        throw error;
+      }
+    }
+    
+    throw lastError || new Error('Failed to get Jupiter quote after retries');
   }
 
   /**

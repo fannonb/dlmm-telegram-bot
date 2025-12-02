@@ -25,13 +25,13 @@ export function mainMenuKeyboard(hasWallet: boolean): InlineKeyboardMarkup {
             ],
             [
                 { text: '💸 Claim Fees', callback_data: 'fees_menu' },
-                { text: '🏊 Browse Pools', callback_data: 'pools_browse' },
+                { text: '🔄 Swap', callback_data: 'swap_menu' },
             ],
             [
+                { text: '🏊 Browse Pools', callback_data: 'pools_browse' },
                 { text: '💼 Wallet', callback_data: 'wallet_info' },
-                { text: '⚙️ Settings', callback_data: 'settings_main' },
             ],
-            [{ text: '🏠 Menu', callback_data: 'menu_main' }],
+            [{ text: '⚙️ Settings', callback_data: 'settings_main' }],
         ],
     };
 }

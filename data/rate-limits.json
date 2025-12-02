@@ -2,12 +2,12 @@
   "entries": {
     "80594440-default": {
       "userId": 80594440,
-      "tokens": 5,
-      "lastRefill": 1764585298252,
-      "requestCount": 188,
-      "hourlyCount": 7,
-      "hourlyReset": 1764588884139
+      "tokens": 6,
+      "lastRefill": 1764717386016,
+      "requestCount": 244,
+      "hourlyCount": 55,
+      "hourlyReset": 1764718695600
     }
   },
-  "lastCleanup": 1764602674686
-}}
+  "lastCleanup": 1764715680162
+}

@@ -187,6 +187,8 @@ import { monitoringScheduler } from './services/monitoringScheduler.service';
 import {
     handlePoolsMenu,
     handlePoolSearchAddress,
+    handlePoolSearchManual,
+    handlePoolPreset,
     handlePoolAddressInput,
     handlePoolSearchPair,
     handlePoolPairInput,
@@ -211,6 +213,23 @@ import {
     handleAmountsRetry,
     handleExecuteNewPosition,
 } from './handlers/pools';
+
+// Swap handlers
+import {
+    handleSwapMenu,
+    handleSwapFromToken,
+    handleSwapToToken,
+    handleSwapAmountPercent,
+    handleSwapAmountText,
+    handleSwapExecute,
+    handleSwapRefreshQuote,
+    handleSwapFromCustom,
+    handleSwapToCustom,
+    handleSwapCustomMint,
+    handleSmartSwap,
+    handleSmartSwapQuote,
+    handleSmartSwapCustom,
+} from './handlers/swap';
 
 // Initialize bot
 const bot = new Telegraf<BotContext>(BOT_CONFIG.token);
@@ -519,6 +538,47 @@ bot.action(/^pos_compound_exec_(\d+)_(.+)$/, async (ctx) => {
     await handleCompoundExecute(ctx, ratio, shortAddr);
 });
 
+// ==================== SWAP ====================
+
+// Swap menu
+bot.action('swap_menu', handleSwapMenu);
+
+// Swap from token selection
+bot.action(/^swap_from_(.+)$/, async (ctx) => {
+    const token = ctx.match[1];
+    if (token === 'custom') {
+        await handleSwapFromCustom(ctx);
+    } else {
+        await handleSwapFromToken(ctx, token);
+    }
+});
+
+// Swap to token selection
+bot.action(/^swap_to_(.+)$/, async (ctx) => {
+    const token = ctx.match[1];
+    if (token === 'custom') {
+        await handleSwapToCustom(ctx);
+    } else {
+        await handleSwapToToken(ctx, token);
+    }
+});
+
+// Swap amount percentage
+bot.action(/^swap_amount_(\d+)$/, async (ctx) => {
+    const percent = parseInt(ctx.match[1], 10);
+    await handleSwapAmountPercent(ctx, percent);
+});
+
+// Execute swap
+bot.action('swap_execute', handleSwapExecute);
+
+// Refresh quote
+bot.action('swap_refresh_quote', handleSwapRefreshQuote);
+
+// Smart swap (context-aware)
+bot.action('swap_smart_quote', handleSmartSwapQuote);
+bot.action('swap_smart_custom', handleSmartSwapCustom);
+
 // Remove liquidity percent - must be before pos_remove_ (more specific pattern)
 bot.action(/^pos_remove_pct_(\d+)_(.+)$/, async (ctx) => {
     const percent = parseInt(ctx.match[1], 10);
@@ -673,6 +733,17 @@ bot.action('pools_menu', async (ctx) => {
 // Pool search by address
 bot.action('pool_search_address', async (ctx) => {
     await handlePoolSearchAddress(ctx);
+});
+
+// Pool search - manual address entry
+bot.action('pool_search_manual', async (ctx) => {
+    await handlePoolSearchManual(ctx);
+});
+
+// Pool preset selection (popular pools)
+bot.action(/^pool_preset_(.+)$/, async (ctx) => {
+    const addressPrefix = ctx.match[1];
+    await handlePoolPreset(ctx, addressPrefix);
 });
 
 // Pool search by token pair
@@ -1092,6 +1163,24 @@ bot.on('text', async (ctx) => {
     // Handle RPC URL input (add endpoint flows)
     if (flow === 'rpc_add_preset' || flow === 'rpc_add_custom') {
         await processRpcUrlInput(ctx);
+        return;
+    }
+
+    // Handle swap amount text input
+    if (flow === 'swap_amount') {
+        await handleSwapAmountText(ctx, text);
+        return;
+    }
+
+    // Handle swap custom token mint (from)
+    if (flow === 'swap_custom_from') {
+        await handleSwapCustomMint(ctx, text, true);
+        return;
+    }
+
+    // Handle swap custom token mint (to)
+    if (flow === 'swap_custom_to') {
+        await handleSwapCustomMint(ctx, text, false);
         return;
     }
 

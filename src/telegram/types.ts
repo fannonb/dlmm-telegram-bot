@@ -75,7 +75,11 @@ export type ConversationFlow =
     | 'price_alert_input'
     | 'fee_threshold_input'
     | 'rpc_add_preset'
-    | 'rpc_add_custom';
+    | 'rpc_add_custom'
+    | 'swap'
+    | 'swap_amount'
+    | 'swap_custom_from'
+    | 'swap_custom_to';
 
 export type WaitingInputType =
     | 'private_key'

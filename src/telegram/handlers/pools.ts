@@ -27,20 +27,32 @@ import { connectionService } from '../../services/connection.service';
 const POOLS_PER_PAGE = 5;
 const NATIVE_SOL_MINT = 'So11111111111111111111111111111111111111112';
 
+// SOL reserve for rent and transaction fees when creating positions
+// Base: 0.003 SOL position rent + 0.01 SOL tx buffer + potential ATA creation
+const SOL_RENT_RESERVE_LAMPORTS = 50_000_000; // 0.05 SOL reserve for safety
+const SOL_RENT_RESERVE = SOL_RENT_RESERVE_LAMPORTS / 1_000_000_000;
+
 // ==================== HELPER FUNCTIONS ====================
 
 /**
  * Get token balance for a wallet
  * Handles both native SOL and SPL tokens
  */
-async function getTokenBalance(keypair: Keypair, tokenMint: string, decimals: number): Promise<number> {
+async function getTokenBalance(keypair: Keypair, tokenMint: string, decimals: number, reserveForRent: boolean = false): Promise<number> {
     try {
         const connection = connectionService.getConnection();
 
         // Check if this is native SOL
         if (tokenMint === NATIVE_SOL_MINT) {
             const balance = await connection.getBalance(keypair.publicKey);
-            return balance / Math.pow(10, 9); // SOL always has 9 decimals
+            const balanceInSol = balance / Math.pow(10, 9); // SOL always has 9 decimals
+            
+            // When reserveForRent is true, subtract rent reserve from available balance
+            // This ensures user can't try to deposit more SOL than they can afford
+            if (reserveForRent) {
+                return Math.max(0, balanceInSol - SOL_RENT_RESERVE);
+            }
+            return balanceInSol;
         }
 
         // SPL Token
@@ -59,13 +71,17 @@ async function getTokenBalance(keypair: Keypair, tokenMint: string, decimals: nu
  */
 async function getPoolTokenBalances(
     keypair: Keypair,
-    pool: PoolInfo
-): Promise<{ tokenXBalance: number; tokenYBalance: number }> {
+    pool: PoolInfo,
+    reserveSolForRent: boolean = false
+): Promise<{ tokenXBalance: number; tokenYBalance: number; rawSolBalance: number }> {
+    const connection = connectionService.getConnection();
+    const rawSolBalance = await connection.getBalance(keypair.publicKey) / 1_000_000_000;
+    
     const [tokenXBalance, tokenYBalance] = await Promise.all([
-        getTokenBalance(keypair, pool.tokenX.mint, pool.tokenX.decimals),
-        getTokenBalance(keypair, pool.tokenY.mint, pool.tokenY.decimals)
+        getTokenBalance(keypair, pool.tokenX.mint, pool.tokenX.decimals, reserveSolForRent),
+        getTokenBalance(keypair, pool.tokenY.mint, pool.tokenY.decimals, reserveSolForRent)
     ]);
-    return { tokenXBalance, tokenYBalance };
+    return { tokenXBalance, tokenYBalance, rawSolBalance };
 }
 
 function formatPoolCard(pool: PoolInfo, index: number): string {
@@ -135,25 +151,82 @@ export async function handlePoolsMenu(ctx: BotContext) {
     );
 }
 
+// ==================== POPULAR POOL PRESETS ====================
+
+// High TVL/Volume Meteora DLMM pools for quick access
+const POPULAR_POOLS = [
+    { name: 'SOL/USDC', address: 'BGm1tav58oGcsQJehL9WXBFXF7D27vZsKefj4xJKD5Y', description: 'Most liquid pair' },
+    { name: 'SOL/USDT', address: 'ARwi1S4DaiTG5DX7S4M4ZsrXqpMD1MrTmbu9ue2tpmEq', description: 'High volume stablecoin' },
+];
+
 // ==================== SEARCH BY ADDRESS ====================
 
 export async function handlePoolSearchAddress(ctx: BotContext) {
     // Set conversation state to expect pool address
     ctx.session.currentFlow = 'pool_search_address';
 
+    // Build popular pool buttons
+    const popularPoolButtons = POPULAR_POOLS.map(pool => 
+        [{ text: `🔥 ${pool.name}`, callback_data: `pool_preset_${pool.address.slice(0, 20)}` }]
+    );
+
     await ctx.editMessageText(
         `🔍 **Search Pool by Address**\n\n` +
+        `**🔥 Popular Pools (High TVL):**\n` +
+        POPULAR_POOLS.map(p => `• ${p.name} - _${p.description}_`).join('\n') +
+        `\n\n` +
+        `Or send a pool address manually:\n` +
+        `Example: \`BGm1tav58oGcsQJehL9WXBFXF7D27vZsKefj4xJKD5Y\``,
+        {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    ...popularPoolButtons,
+                    [{ text: '✏️ Enter Address Manually', callback_data: 'pool_search_manual' }],
+                    [{ text: '❌ Cancel', callback_data: 'pools_menu' }]
+                ]
+            }
+        }
+    );
+}
+
+/**
+ * Handle manual address entry (after clicking "Enter Address Manually")
+ */
+export async function handlePoolSearchManual(ctx: BotContext) {
+    ctx.session.currentFlow = 'pool_search_address';
+
+    await ctx.editMessageText(
+        `🔍 **Enter Pool Address**\n\n` +
         `Please send the pool address you want to look up.\n\n` +
         `Example: \`BGm1tav58oGcsQJehL9WXBFXF7D27vZsKefj4xJKD5Y\``,
         {
             parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
+                    [{ text: '⬅️ Back to Popular Pools', callback_data: 'pool_search_address' }],
                     [{ text: '❌ Cancel', callback_data: 'pools_menu' }]
                 ]
             }
         }
     );
+}
+
+/**
+ * Handle popular pool preset selection
+ */
+export async function handlePoolPreset(ctx: BotContext, addressPrefix: string) {
+    // Find the pool by prefix
+    const pool = POPULAR_POOLS.find(p => p.address.startsWith(addressPrefix));
+    if (!pool) {
+        await ctx.answerCbQuery('Pool not found');
+        return;
+    }
+
+    await ctx.answerCbQuery(`Loading ${pool.name}...`);
+    
+    // Load the pool directly
+    await handlePoolAddressInput(ctx, pool.address);
 }
 
 export async function handlePoolAddressInput(ctx: BotContext, address: string) {
@@ -1461,18 +1534,25 @@ export async function handleAutoAmountInput(ctx: BotContext, input: string) {
         let tokenXBalance = 0;
         let tokenYBalance = 0;
         let solBalance = 0;
+        let rawSolBalance = 0;
+        let tokenXIsSOL = false;
+        let tokenYIsSOL = false;
 
         if (keypair) {
             // Get actual token balances for the pool tokens
-            const balances = await getPoolTokenBalances(keypair, pool);
+            // Reserve SOL for rent when checking available balance
+            const balances = await getPoolTokenBalances(keypair, pool, true);
             tokenXBalance = balances.tokenXBalance;
             tokenYBalance = balances.tokenYBalance;
+            rawSolBalance = balances.rawSolBalance;
+            
+            // Check if either token is SOL
+            tokenXIsSOL = pool.tokenX.mint === NATIVE_SOL_MINT;
+            tokenYIsSOL = pool.tokenY.mint === NATIVE_SOL_MINT;
+            
             hasEnoughX = tokenXBalance >= amountX;
             hasEnoughY = tokenYBalance >= amountY;
-
-            // Also get SOL balance for potential swaps
-            const connection = connectionService.getConnection();
-            solBalance = await connection.getBalance(keypair.publicKey) / 1e9;
+            solBalance = rawSolBalance;
         }
 
         // Calculate shortfalls for auto-swap
@@ -1485,7 +1565,12 @@ export async function handleAutoAmountInput(ctx: BotContext, input: string) {
         const canAutoSwapForX = !hasEnoughX && tokenXShortfall > 0 && (tokenYBalance > 0 || solBalance > 0.01);
         const canAutoSwapForY = hasEnoughX && !hasEnoughY && tokenYShortfall > 0;
 
-        // Build result message
+        // Build result message with rent reserve info for SOL
+        let rentReserveNote = '';
+        if (tokenXIsSOL || tokenYIsSOL) {
+            rentReserveNote = `\n_ℹ️ ${SOL_RENT_RESERVE.toFixed(2)} SOL reserved for rent & fees_\n`;
+        }
+
         let resultMessage = `
 ✅ **Y Amount Calculated!**
 
@@ -1495,7 +1580,7 @@ _(Based on ${calculationMethod})_
 **Your Deposit:**
 • ${amountX} ${pool.tokenX.symbol}
 • ${amountY.toFixed(6)} ${pool.tokenY.symbol}
-`;
+${rentReserveNote}`;
 
         const buttons: any[] = [];
 
@@ -1527,8 +1612,18 @@ Shortfall: ${tokenXShortfall.toFixed(4)} ${pool.tokenX.symbol}
             buttons.push([{ text: `🔄 Auto-Swap & Create Position`, callback_data: 'newpos_autoswap_x' }]);
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: 'newpos_amount_auto' }]);
         } else if (!hasEnoughX) {
-            resultMessage += `\n⚠️ **Insufficient ${pool.tokenX.symbol}!** You have ${tokenXBalance.toFixed(4)}`;
-            resultMessage += `\n\n💡 You need ${pool.tokenX.symbol} tokens to create this position. Buy some first or try a different pool.`;
+            // Show available balance info, including raw SOL if X is SOL
+            if (tokenXIsSOL) {
+                resultMessage += `\n⚠️ **Insufficient ${pool.tokenX.symbol}!**`;
+                resultMessage += `\n• Total SOL: ${rawSolBalance.toFixed(4)}`;
+                resultMessage += `\n• Reserved for rent: ${SOL_RENT_RESERVE.toFixed(2)}`;
+                resultMessage += `\n• Available to deposit: ${tokenXBalance.toFixed(4)}`;
+                resultMessage += `\n• Trying to deposit: ${amountX.toFixed(4)}`;
+            } else {
+                resultMessage += `\n⚠️ **Insufficient ${pool.tokenX.symbol}!** You have ${tokenXBalance.toFixed(4)}`;
+            }
+            resultMessage += `\n\n💡 You need more ${pool.tokenX.symbol} tokens to create this position.`;
+            buttons.push([{ text: '🔄 Swap to Get Tokens', callback_data: 'swap_menu' }]);
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: 'newpos_amount_auto' }]);
         } else if (!hasEnoughY && canAutoSwapForY) {
             // Offer auto-swap option for tokenY
@@ -1550,6 +1645,8 @@ We can swap some ${pool.tokenX.symbol} to get the needed ${pool.tokenY.symbol}.
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: 'newpos_amount_auto' }]);
         } else if (!hasEnoughY) {
             resultMessage += `\n⚠️ **Insufficient ${pool.tokenY.symbol}!** You have ${tokenYBalance.toFixed(4)}`;
+            resultMessage += `\n\n💡 You need ${pool.tokenY.symbol} tokens to create this position.`;
+            buttons.push([{ text: '🔄 Swap to Get Tokens', callback_data: 'swap_menu' }]);
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: 'newpos_amount_auto' }]);
         } else {
             // All good, can proceed
@@ -2277,6 +2374,17 @@ export async function handleExecuteNewPosition(ctx: BotContext) {
             suggestions = `\n\n💡 Network congestion. Please try again in a few moments.`;
         }
 
+        // Build action buttons based on error type
+        const actionButtons: any[] = [];
+        if (lamportsMatch) {
+            // Insufficient SOL - offer swap option
+            actionButtons.push([{ text: '🔄 Swap to Get SOL', callback_data: 'swap_menu' }]);
+            actionButtons.push([{ text: '📉 Try Smaller Range', callback_data: 'newpos_skip_ai' }]);
+        } else {
+            actionButtons.push([{ text: '🔄 Try Again', callback_data: 'newpos_execute' }]);
+        }
+        actionButtons.push([{ text: '⬅️ Back', callback_data: 'pools_menu' }]);
+
         await ctx.editMessageText(
             `❌ **Position creation failed**\n\n` +
             userFriendlyMessage +
@@ -2285,10 +2393,7 @@ export async function handleExecuteNewPosition(ctx: BotContext) {
             {
                 parse_mode: 'Markdown',
                 reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🔄 Try Again', callback_data: 'newpos_execute' }],
-                        [{ text: '⬅️ Back', callback_data: 'pools_menu' }]
-                    ]
+                    inline_keyboard: actionButtons
                 }
             }
         );

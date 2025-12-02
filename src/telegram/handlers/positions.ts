@@ -1148,6 +1148,7 @@ export async function handleExecuteRebalanceConfirm(ctx: BotContext, shortAddr: 
             `Creating a **${totalBins}-bin** position requires ~**${estimatedRentNeeded.toFixed(4)} SOL** for rent.\n` +
             `Your wallet only has **${walletSol.toFixed(4)} SOL**.\n\n` +
             `💡 **Options:**\n` +
+            `• Swap other tokens for SOL\n` +
             `• Add **${(estimatedRentNeeded - walletSol).toFixed(4)} SOL** to your wallet\n` +
             `• Use a smaller range: **${suggestedBins * 2} bins** needs ~${(basePositionRent + suggestedBins * 2 * estimatedRentPerBin + 0.01).toFixed(4)} SOL\n\n` +
             `Would you like to proceed with a smaller range?`,
@@ -1155,6 +1156,7 @@ export async function handleExecuteRebalanceConfirm(ctx: BotContext, shortAddr: 
                 parse_mode: 'Markdown',
                 reply_markup: {
                     inline_keyboard: [
+                        [{ text: '🔄 Swap for SOL', callback_data: 'swap_menu' }],
                         [{ text: `✅ Use ${suggestedBins * 2} bins instead`, callback_data: `pos_rebal_bins_${shortAddr}_${suggestedBins}` }],
                         [{ text: '❌ Cancel', callback_data: `pos_detail_${shortAddr}` }]
                     ]
@@ -1661,6 +1663,7 @@ export async function processAddLiquidityInput(ctx: BotContext, input: string) {
 
         if (!hasEnoughX && !hasEnoughY) {
             resultMessage += `\n❌ **Insufficient funds for both tokens!**`;
+            buttons.push([{ text: '🔄 Swap to Get Tokens', callback_data: 'swap_menu' }]);
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: `pos_addliq_amounts_${shortAddr}` }]);
         } else if (canAutoSwapXtoY) {
             // Can swap X (SOL) to get Y (USDC)
@@ -1692,9 +1695,11 @@ export async function processAddLiquidityInput(ctx: BotContext, input: string) {
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: `pos_addliq_amounts_${shortAddr}` }]);
         } else if (!hasEnoughX) {
             resultMessage += `\n⚠️ **Insufficient ${flowData.tokenXSymbol}!**`;
+            buttons.push([{ text: '🔄 Swap to Get Tokens', callback_data: 'swap_menu' }]);
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: `pos_addliq_amounts_${shortAddr}` }]);
         } else if (!hasEnoughY) {
             resultMessage += `\n⚠️ **Insufficient ${flowData.tokenYSymbol}!**`;
+            buttons.push([{ text: '🔄 Swap to Get Tokens', callback_data: 'swap_menu' }]);
             buttons.push([{ text: '🔄 Try Different Amount', callback_data: `pos_addliq_amounts_${shortAddr}` }]);
         } else {
             // All good, can proceed directly

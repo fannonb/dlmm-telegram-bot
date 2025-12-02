@@ -13,3 +13,4 @@ cargo t -p commons --test '*'
 2. anchor localnet -- --features localnet
 3. pnpm run test
 ```
+3

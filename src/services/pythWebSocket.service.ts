@@ -82,9 +82,15 @@ class PythWebSocketService extends EventEmitter {
   private prices: Map<string, PythPriceUpdate> = new Map();
   private isConnected = false;
   private reconnectAttempts = 0;
-  private readonly MAX_RECONNECT_ATTEMPTS = 5;
-  private readonly RECONNECT_DELAY_MS = 3000;
+  
+  // Configurable via environment variables
+  private readonly MAX_RECONNECT_ATTEMPTS = parseInt(process.env.PYTH_MAX_RECONNECT_ATTEMPTS || '5', 10);
+  private readonly RECONNECT_DELAY_MS = parseInt(process.env.PYTH_RECONNECT_DELAY_MS || '3000', 10);
+  private readonly FALLBACK_POLL_INTERVAL_MS = parseInt(process.env.PYTH_FALLBACK_POLL_INTERVAL_MS || '10000', 10);
+  
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private fallbackPollTimer: NodeJS.Timeout | null = null;
+  private usingFallback = false;
 
   constructor() {
     super();
@@ -176,6 +182,10 @@ class PythWebSocketService extends EventEmitter {
         console.log('[PythWS] ✓ Connected to Pyth Hermes SSE stream');
         this.isConnected = true;
         this.reconnectAttempts = 0;
+        // If we were using fallback polling, stop it now that SSE is working
+        if (this.usingFallback) {
+          this.stopFallbackPolling();
+        }
         this.emit('connected');
       };
 
@@ -192,6 +202,15 @@ class PythWebSocketService extends EventEmitter {
         const errorMessage = error?.message || 'Unknown error';
         if (!errorMessage.includes('terminated') && !errorMessage.includes('closed')) {
           console.error('[PythWS] SSE connection error:', errorMessage);
+          // Log additional details for debugging network/TLS issues
+          if (error) {
+            console.error('[PythWS] Error details:', JSON.stringify({
+              type: error.type,
+              status: error.status,
+              code: error.code,
+              message: error.message,
+            }, null, 2));
+          }
         } else {
           console.log('[PythWS] SSE connection closed, will reconnect...');
         }
@@ -257,8 +276,9 @@ class PythWebSocketService extends EventEmitter {
     }
 
     if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
-      console.error('[PythWS] Max reconnection attempts reached. Giving up.');
+      console.error('[PythWS] Max reconnection attempts reached. Starting REST fallback polling.');
       this.emit('maxReconnectAttemptsReached');
+      this.startFallbackPolling();
       return;
     }
 
@@ -273,6 +293,60 @@ class PythWebSocketService extends EventEmitter {
   }
 
   /**
+   * Start REST fallback polling when SSE is unavailable
+   * This keeps price data flowing even if SSE connections fail
+   */
+  private startFallbackPolling(): void {
+    if (this.fallbackPollTimer) {
+      return; // Already polling
+    }
+
+    if (this.subscribedFeeds.size === 0) {
+      console.warn('[PythWS] No feeds to poll in fallback mode');
+      return;
+    }
+
+    this.usingFallback = true;
+    console.log(`[PythWS] Starting REST fallback polling every ${this.FALLBACK_POLL_INTERVAL_MS}ms`);
+
+    // Do an immediate poll
+    this.doFallbackPoll();
+
+    this.fallbackPollTimer = setInterval(() => {
+      this.doFallbackPoll();
+    }, this.FALLBACK_POLL_INTERVAL_MS);
+  }
+
+  /**
+   * Perform a single REST poll for prices
+   */
+  private async doFallbackPoll(): Promise<void> {
+    try {
+      const feedIds = Array.from(this.subscribedFeeds);
+      const prices = await this.fetchLatestPrices(feedIds);
+      
+      for (const priceUpdate of prices.values()) {
+        this.emit('priceUpdate', priceUpdate);
+        this.emit(`price:${priceUpdate.id}`, priceUpdate);
+      }
+    } catch (error) {
+      console.error('[PythWS] REST fallback poll error:', error instanceof Error ? error.message : error);
+    }
+  }
+
+  /**
+   * Stop fallback polling (called when SSE reconnects successfully)
+   */
+  private stopFallbackPolling(): void {
+    if (this.fallbackPollTimer) {
+      clearInterval(this.fallbackPollTimer);
+      this.fallbackPollTimer = null;
+      this.usingFallback = false;
+      console.log('[PythWS] Stopped REST fallback polling');
+    }
+  }
+
+  /**
    * Disconnect from the SSE stream
    */
   public async disconnect(): Promise<void> {
@@ -280,6 +354,9 @@ class PythWebSocketService extends EventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+
+    // Stop fallback polling if active
+    this.stopFallbackPolling();
 
     if (this.eventSource) {
       this.eventSource.close();
@@ -289,6 +366,13 @@ class PythWebSocketService extends EventEmitter {
     this.isConnected = false;
     console.log('[PythWS] Disconnected from Pyth Hermes');
     this.emit('disconnected');
+  }
+
+  /**
+   * Check if using REST fallback mode
+   */
+  public get isUsingFallback(): boolean {
+    return this.usingFallback;
   }
 
   /**
